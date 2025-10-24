@@ -1,0 +1,35 @@
+#root {
+  width: 100%;
+}
+
+.monitor {
+  width: fit-content;
+  margin: 0 auto;
+  padding: 2rem;
+  font-size: 0.8rem;
+}
+
+.monitor .box {
+  border: 1px solid;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.monitor h2 {
+  margin: 0;
+  margin-bottom: 0.75rem;
+}
+
+.monitor h3 {
+  margin: 0;
+  margin-bottom: 0.5rem;
+}
+
+.monitor td {
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.monitor td strong {
+  padding-right: 1rem;
+}
