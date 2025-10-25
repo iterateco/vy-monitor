@@ -2,6 +2,14 @@
   width: 100%;
 }
 
+header {
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid #222222;
+}
+
 .monitor {
   margin: 0 auto;
   padding: 1rem;
@@ -9,28 +17,40 @@
   max-width: 40rem;
 }
 
-.monitor .box {
-  border: 1px solid;
+.box {
   padding: 1rem;
   margin-bottom: 1.5rem;
   overflow-x: auto;
+  background: #181818;
+  border-radius: 0.5rem;
 }
 
-.monitor h2 {
+h2 {
   margin: 0;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+  font-size: 1.1rem;
 }
 
-.monitor h3 {
+h3 {
   margin: 0;
   margin-bottom: 0.5rem;
 }
 
-.monitor td {
+td {
   vertical-align: top;
   white-space: nowrap;
 }
 
-.monitor td strong {
+td strong {
   padding-right: 1rem;
+}
+
+@media (prefers-color-scheme: light) {
+  header {
+    border-bottom-color: #ccc;
+  }
+
+  .box {
+    background: #eee;
+  }
 }
