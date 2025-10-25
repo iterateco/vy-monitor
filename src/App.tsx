@@ -8,10 +8,10 @@ function App() {
 
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'center', padding: '0.5rem', borderBottom: '1px solid gray' }}>
+      <header>
         Valinity Monitor&nbsp;
         <a href={`?network=${otherNetwork}`}>[{network}]</a>
-      </div>
+      </header>
 
       {network === 'mainnet' ? null : <Testnet />}
     </>
