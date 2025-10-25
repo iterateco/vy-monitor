@@ -161,16 +161,18 @@ function Content() {
 function renderValues(data: object): JSX.Element {
   return (
     <table>
-      {Object.entries(data).map(([key, value]) => (
-        <tr key={key}>
-          <td >
-            <strong>{startCase(key)}</strong>
-          </td>
-          <td>
-            <Value>{value}</Value>
-          </td>
-        </tr>
-      ))}
+      <tbody>
+        {Object.entries(data).map(([key, value]) => (
+          <tr key={key}>
+            <td >
+              <strong>{startCase(key)}</strong>
+            </td>
+            <td>
+              <Value>{value}</Value>
+            </td>
+          </tr>
+        ))}
+      </tbody>
     </table>
   );
 }
