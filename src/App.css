@@ -3,16 +3,17 @@
 }
 
 .monitor {
-  width: fit-content;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 1rem;
   font-size: 0.8rem;
+  max-width: 40rem;
 }
 
 .monitor .box {
   border: 1px solid;
   padding: 1rem;
   margin-bottom: 1.5rem;
+  overflow-x: auto;
 }
 
 .monitor h2 {
