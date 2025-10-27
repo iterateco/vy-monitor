@@ -1,10 +1,10 @@
 import { type Currency } from './Currency';
 
-export class Amount {
+export class Amount<T = number | bigint> {
   currency: Currency;
-  value: number | bigint;
+  value: T;
 
-  constructor(currency: Currency, value: number | bigint) {
+  constructor(currency: Currency, value: T) {
     this.currency = currency;
     this.value = value;
   }

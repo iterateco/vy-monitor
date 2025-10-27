@@ -1,7 +1,11 @@
 import { etherUnits, formatUnits } from 'viem';
 import { Amount } from '../models';
 
-export function formatValue(value: unknown) {
+export interface FormatValueOptions {
+  includeSybmol?: boolean
+}
+
+export function formatValue(value: unknown, options?: FormatValueOptions) {
   const currency = value instanceof Amount ? value.currency : undefined;
   value = value instanceof Amount ? value.value : value;
   let formatted: string
@@ -17,7 +21,7 @@ export function formatValue(value: unknown) {
     formatted = String(value);
   }
 
-  if (currency) {
+  if (currency && options?.includeSybmol !== false) {
     formatted += ` ${currency.symbol}`;
   }
 

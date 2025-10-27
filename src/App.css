@@ -34,6 +34,7 @@ h2 {
 h3 {
   margin: 0;
   margin-bottom: 0.5rem;
+  border-bottom: 1px solid grey;
 }
 
 td {
@@ -41,8 +42,14 @@ td {
   white-space: nowrap;
 }
 
-td strong {
-  padding-right: 1rem;
+td+td,
+th+th {
+  padding-left: 1rem;
+}
+
+th {
+  font-weight: bold;
+  text-align: left;
 }
 
 @media (prefers-color-scheme: light) {
