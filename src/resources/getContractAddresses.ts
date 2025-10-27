@@ -1,7 +1,7 @@
 import { keccak256, toBytes, type Address, type PublicClient } from 'viem';
 import networks from '../networks';
 
-export async function getContractAddresses(client: PublicClient, networkName: keyof typeof networks) {
+export async function getRegisteredAddresses(client: PublicClient, networkName: keyof typeof networks) {
   const { abis, registeredContractNames, addresses: staticAddresses } = networks[networkName];
 
   const registeredAddresses = await client.multicall({

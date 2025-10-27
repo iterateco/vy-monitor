@@ -12,3 +12,12 @@ export const REGISTERED_CONTRACT_NAMES = [
   // 'ValinityPortal'
 ]
 
+export const CONTRACT_ACRONYMS = {
+  ValinityAssetRegistry: 'VAR',
+  ValinityToken: 'VY',
+  ValinityAcquisitionTreasury: 'VAT',
+  ValinityReserveTreasury: 'VRT',
+  ValinityAcquisitionOfficer: 'VAO',
+  ValinityCapOfficer: 'VCO',
+  ValinityLoanOfficer: 'VLO'
+}
