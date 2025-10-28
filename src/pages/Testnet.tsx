@@ -68,6 +68,7 @@ const dataResource = createResource(async () => {
     });
 
     const currency = { symbol, decimals };
+    const scaleFactor = BigInt(10) ** BigInt(18 - decimals);
 
     return {
       symbol,
@@ -77,9 +78,9 @@ const dataResource = createResource(async () => {
       LTV: ltv,
       LTVF: new Amount(USD, ltvf),
       reserveBalance: new Amount(currency, reserveBalance),
-      reserveBalanceUSD: new Amount(USD, (reserveBalance * spotPrice) / BigInt(1e18)),
+      reserveBalanceUSD: new Amount(USD, ((reserveBalance * scaleFactor) * spotPrice) / BigInt(1e18)),
       totalLoaned: new Amount(currency, totalLoaned),
-      totalLoanedUSD: new Amount(USD, (totalLoaned * spotPrice) / BigInt(1e18)),
+      totalLoanedUSD: new Amount(USD, ((totalLoaned * scaleFactor) * spotPrice) / BigInt(1e18)),
       cap: new Amount(VY, cap),
       collateralized: new Amount(VY, collateralized)
     }
