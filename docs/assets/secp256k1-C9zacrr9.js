@@ -1,1 +1,0 @@
-import{t as e}from"./index-C4YWMG-2.js";export{e as secp256k1};
