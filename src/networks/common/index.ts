@@ -10,7 +10,7 @@ export default {
     'ValinityAcquisitionOfficer',
     'ValinityCapOfficer',
     'ValinityLoanOfficer',
-    // 'ValinityPortal'
+    'ValinityPortal'
   ]
 } as const;
 
