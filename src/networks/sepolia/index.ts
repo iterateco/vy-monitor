@@ -16,7 +16,7 @@ export default {
     ...common.registeredContractNames
   ],
   addresses: {
-    ValinityRegistrar: '0x025a45c77FE16f5e11f75b1a3E438EE7cE05AE51',
+    ValinityRegistrar: '0x32eD520bca8798B21f6eF9514c2f0a752a573598',
     Comptroller: '0xEc2Ec9668aEde69996eE17821094d16a2257d1b4',
   }
 } as const;

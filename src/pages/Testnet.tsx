@@ -101,6 +101,7 @@ const dataResource = createResource(async () => {
     'ValinityAcquisitionTreasury',
     'ValinityReserveTreasury',
     'ValinityCapOfficer',
+    'ValinityPortal',
     'Comptroller'
   ] as const;
 

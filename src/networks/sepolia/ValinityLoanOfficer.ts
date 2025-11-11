@@ -463,11 +463,6 @@ export default [
           },
           {
             "internalType": "uint256",
-            "name": "ltvf",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
             "name": "reserveBalance",
             "type": "uint256"
           },

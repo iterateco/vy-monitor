@@ -19,5 +19,6 @@ export const CONTRACT_ACRONYMS = {
   ValinityReserveTreasury: 'VRT',
   ValinityAcquisitionOfficer: 'VAO',
   ValinityCapOfficer: 'VCO',
-  ValinityLoanOfficer: 'VLO'
+  ValinityLoanOfficer: 'VLO',
+  ValinityPortal: 'VP'
 }
