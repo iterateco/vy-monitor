@@ -20,5 +20,6 @@ export const CONTRACT_ACRONYMS: Record<string, string> = {
   ValinityMEVBot: 'VMEV',
   ValinityBuybackOfficer: 'VBO',
   ValinityDCAOfficer: 'VDCA',
-  ValinityYieldOfficer: 'VYO'
+  ValinityYieldOfficer: 'VYO',
+  ValinityStakingRouter: 'VSR'
 }
