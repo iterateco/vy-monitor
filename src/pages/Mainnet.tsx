@@ -50,7 +50,7 @@ const dataResource = createResource(async () => {
 
     // Collateral-only calls: spotPrice, assetView, ltvf, cap, collateralized
     const collateralContracts = isCollateral ? [
-      { ...vaoConfig, functionName: 'getSpotPriceUSD', args: [assetAddr] },
+      { ...vaoConfig, functionName: 'getAssetTwapPrice', args: [assetAddr] },
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
       { ...vaoConfig, functionName: 'getLTVF', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
@@ -69,7 +69,7 @@ const dataResource = createResource(async () => {
       if (r.status === 'success') return r.result as T;
       // For collateral: spot price / LTVF reverts are warnings (pool not configured), not errors
       const msg = `${label}: ${(r.error as Error).message ?? 'reverted'}`;
-      if (label === 'getSpotPriceUSD' || label === 'getLTVF') {
+      if (label === 'getAssetTwapPrice' || label === 'getLTVF') {
         warnings.push(msg);
       } else {
         errors.push(msg);
@@ -104,7 +104,7 @@ const dataResource = createResource(async () => {
     }
 
     // Collateral asset — parse remaining results (indices 2..6)
-    const spotPrice = get(2, 'getSpotPriceUSD', 0n);
+    const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
       : (() => { errors.push(`getAssetView: ${(results[3].error as Error).message ?? 'reverted'}`); return { ltv: 0n, reserveBalance: 0n, totalLoaned: 0n }; })();
@@ -157,7 +157,7 @@ const dataResource = createResource(async () => {
     'ValinityReserveTreasury',
     'ValinityCapOfficer',
     'ValinityPortal',
-    'AdminSafe'
+    'Deployer'
   ] as const;
 
   const tokenHolderReads = tokenHolders.map(name => {
