@@ -10,6 +10,12 @@ import { Amount, USD, VY } from '../models';
 import networks from '../networks';
 import createResource from '../utils/createResource';
 
+/**
+ * Assets soportados como colateral (LoanOfficer, CapOfficer, AcquisitionOfficer).
+ * USDC NO es colateral — llamar getAssetView(USDC) causa UnsupportedAsset().
+ */
+const COLLATERAL_SYMBOLS = new Set(['WETH', 'WBTC', 'PAXG']);
+
 const client = createPublicClient({
   chain: mainnet,
   transport: http(MAINNET_RPC_URL),
@@ -18,7 +24,7 @@ const client = createPublicClient({
 const dataResource = createResource(async () => {
   const networkName = 'mainnet';
   const { abis, addresses, assets: assetAddresses } = networks[networkName];
-  const assetAddrs = Object.values(assetAddresses) as Address[];
+  const assetEntries = Object.entries(assetAddresses) as [string, Address][];
 
   const getContractConfig = <T extends keyof typeof abis>(name: T, address?: Address) => {
     return {
@@ -32,31 +38,72 @@ const dataResource = createResource(async () => {
   const vcoConfig = getContractConfig('ValinityCapOfficer');
   const vloConfig = getContractConfig('ValinityLoanOfficer');
 
-  const assets = await Promise.all(assetAddrs.map(async assetAddr => {
+  const assets = await Promise.all(assetEntries.map(async ([assetKey, assetAddr]) => {
     const tokenConfig = getContractConfig('ERC20', assetAddr);
+    const isCollateral = COLLATERAL_SYMBOLS.has(assetKey);
+
+    // Base calls: decimals + symbol (always)
+    const baseContracts = [
+      { ...tokenConfig, functionName: 'decimals' },
+      { ...tokenConfig, functionName: 'symbol' },
+    ];
+
+    // Collateral-only calls: spotPrice, assetView, ltvf, cap, collateralized
+    const collateralContracts = isCollateral ? [
+      { ...vaoConfig, functionName: 'getSpotPriceUSD', args: [assetAddr] },
+      { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
+      { ...vaoConfig, functionName: 'getLTVF', args: [assetAddr] },
+      { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
+      { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] }
+    ] : [];
+
     const results = await client.multicall({
-      contracts: [
-        { ...tokenConfig, functionName: 'decimals' },
-        { ...tokenConfig, functionName: 'symbol' },
-        { ...vaoConfig, functionName: 'getSpotPriceUSD', args: [assetAddr] },
-        { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
-        { ...vaoConfig, functionName: 'getLTVF', args: [assetAddr] },
-        { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
-        { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] }
-      ],
+      contracts: [...baseContracts, ...collateralContracts],
       allowFailure: true
     });
 
     const errors: string[] = [];
+    const warnings: string[] = [];
     const get = <T,>(idx: number, label: string, fallback: T): T => {
       const r = results[idx];
       if (r.status === 'success') return r.result as T;
-      errors.push(`${label}: ${(r.error as Error).message ?? 'reverted'}`);
+      // For collateral: spot price / LTVF reverts are warnings (pool not configured), not errors
+      const msg = `${label}: ${(r.error as Error).message ?? 'reverted'}`;
+      if (label === 'getSpotPriceUSD' || label === 'getLTVF') {
+        warnings.push(msg);
+      } else {
+        errors.push(msg);
+      }
       return fallback;
     };
 
     const decimals = get(0, 'decimals', 18);
     const symbol = get(1, 'symbol', assetAddr.slice(0, 10));
+    const currency = { symbol, decimals };
+
+    if (!isCollateral) {
+      // Stablecoin: no LoanOfficer/CapOfficer/VAO calls
+      return {
+        symbol,
+        currency,
+        address: assetAddr,
+        isCollateral: false,
+        errors,
+        warnings,
+        spotPrice: new Amount(USD, 0n),
+        LTV: 0n,
+        LTVF: new Amount(USD, 0n),
+        reserveBalance: new Amount(currency, 0n),
+        reserveBalanceUSD: new Amount(USD, 0n),
+        totalLoaned: new Amount(currency, 0n),
+        totalLoanedUSD: new Amount(USD, 0n),
+        cap: new Amount(VY, 0n),
+        collateralized: new Amount(VY, 0n),
+        notCollateral: true
+      }
+    }
+
+    // Collateral asset — parse remaining results (indices 2..6)
     const spotPrice = get(2, 'getSpotPriceUSD', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
@@ -66,14 +113,15 @@ const dataResource = createResource(async () => {
     const cap = get(5, 'getAssetCap', 0n);
     const collateralized = get(6, 'getAssetCollateralized', 0n);
 
-    const currency = { symbol, decimals };
     const scaleFactor = BigInt(10) ** BigInt(18 - decimals);
 
     return {
       symbol,
       currency,
       address: assetAddr,
+      isCollateral: true,
       errors,
+      warnings,
       spotPrice: new Amount(USD, spotPrice),
       LTV: ltv,
       LTVF: new Amount(USD, ltvf),
@@ -87,6 +135,7 @@ const dataResource = createResource(async () => {
   }));
 
   const overviewErrors: string[] = [];
+  const overviewWarnings: string[] = [];
 
   const overviewResults = await client.multicall({
     contracts: [
@@ -101,7 +150,7 @@ const dataResource = createResource(async () => {
     : (() => { overviewErrors.push(`totalSupply: ${(overviewResults[0].error as Error).message ?? 'reverted'}`); return 0n; })();
   const mtp = overviewResults[1].status === 'success'
     ? overviewResults[1].result
-    : (() => { overviewErrors.push(`getMTP: ${(overviewResults[1].error as Error).message ?? 'reverted'}`); return 'ERROR'; })();
+    : (() => { overviewWarnings.push(`getMTP: Uniswap pools likely not configured yet`); return 'Pending configuration'; })();
 
   const tokenHolders = [
     'ValinityYieldTreasury',
@@ -161,6 +210,10 @@ const dataResource = createResource(async () => {
     tvl += (asset.reserveBalanceUSD.value as bigint) + (asset.totalLoanedUSD.value as bigint);
   }
 
+  // Check if any collateral asset has config warnings (pools not ready)
+  const hasConfigWarnings = overviewWarnings.length > 0 ||
+    assets.some(a => a.isCollateral && a.warnings && a.warnings.length > 0);
+
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
@@ -169,6 +222,8 @@ const dataResource = createResource(async () => {
       MTP: mtp
     },
     overviewErrors,
+    overviewWarnings,
+    hasConfigWarnings,
     balanceMap,
     assets: assets.map(asset => omit(asset, ['currency'])),
   };
@@ -189,11 +244,18 @@ function Content() {
     <div className="monitor">
       <div>
         <h2>Overview</h2>
-        <div className={`box ${data.overviewErrors.length > 0 ? 'box--error' : ''}`}>
+        <div className={`box ${data.overviewErrors.length > 0 ? 'box--error' : data.overviewWarnings.length > 0 ? 'box--warning' : ''}`}>
           {data.overviewErrors.length > 0 && (
             <div className="error-list">
               {data.overviewErrors.map((err, i) => (
                 <div key={i} className="error-item">✗ {err}</div>
+              ))}
+            </div>
+          )}
+          {data.overviewWarnings.length > 0 && (
+            <div className="warning-list">
+              {data.overviewWarnings.map((warn, i) => (
+                <div key={i} className="warning-item">⚠ {warn}</div>
               ))}
             </div>
           )}
@@ -210,12 +272,16 @@ function Content() {
 
       <div>
         <h2>Assets</h2>
-        {data.assets.map(({ symbol, errors, ...values }) => (
-          <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : ''}`}>
+        {data.assets.map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
+          <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`}>
             <h3>
               {symbol}
+              {notCollateral && <span className="info-badge"> (stablecoin — not collateral)</span>}
               {errors && errors.length > 0 && (
                 <span className="error-badge">⚠ {errors.length} error{errors.length > 1 ? 's' : ''}</span>
+              )}
+              {warnings && warnings.length > 0 && !errors?.length && (
+                <span className="warning-badge">⚠ {warnings.length} warning{warnings.length > 1 ? 's' : ''}</span>
               )}
             </h3>
             {errors && errors.length > 0 && (
@@ -225,10 +291,32 @@ function Content() {
                 ))}
               </div>
             )}
+            {warnings && warnings.length > 0 && (
+              <div className="warning-list">
+                {warnings.map((warn, i) => (
+                  <div key={i} className="warning-item">⚠ {warn}</div>
+                ))}
+              </div>
+            )}
             {renderValues(values)}
           </div>
         ))}
       </div>
+
+      {data.hasConfigWarnings && (
+        <div>
+          <h2>Configuration Status</h2>
+          <div className="box box--warning">
+            <p>Some contract calls are reverting. On-chain configuration needed:</p>
+            <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+              <li>Configure fee tiers in AcquisitionOfficer for WETH, WBTC, PAXG</li>
+              <li>Provide liquidity to VY/USDC pool on Uniswap V2</li>
+              <li>Configure Uniswap V3 pools for USDC/WETH, USDC/WBTC, USDC/PAXG pairs</li>
+              <li>Register assets in CapOfficer (setAssetCap)</li>
+            </ul>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
