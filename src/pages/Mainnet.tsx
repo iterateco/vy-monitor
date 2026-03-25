@@ -7,6 +7,7 @@ import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
 import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
 import { Amount, USD, VY } from '../models';
+import type { Currency } from '../models';
 import networks from '../networks';
 import createResource from '../utils/createResource';
 
@@ -106,7 +107,7 @@ const dataResource = createResource(async () => {
     // Collateral asset — parse remaining results (indices 2..6)
     const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
-      ? results[3].result as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
+      ? results[3].result as unknown as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
       : (() => { errors.push(`getAssetView: ${(results[3].error as Error).message ?? 'reverted'}`); return { ltv: 0n, reserveBalance: 0n, totalLoaned: 0n }; })();
     const { ltv, reserveBalance, totalLoaned } = assetView;
     const ltvf = get(4, 'getLTVF', 0n);
@@ -137,10 +138,20 @@ const dataResource = createResource(async () => {
   const overviewErrors: string[] = [];
   const overviewWarnings: string[] = [];
 
+  const pairAddress = (addresses as Record<string, Address>)['UniswapV2Pair_VY_USDC'];
+  const vyTokenAddress = (addresses as Record<string, Address>)['ValinityToken'];
+  const pairAbi = [
+    { inputs: [], name: 'getReserves', outputs: [{ name: 'reserve0', type: 'uint112' }, { name: 'reserve1', type: 'uint112' }, { name: 'blockTimestampLast', type: 'uint32' }], stateMutability: 'view', type: 'function' },
+    { inputs: [], name: 'token0', outputs: [{ name: '', type: 'address' }], stateMutability: 'view', type: 'function' },
+  ] as const;
+  const pairConfig = { abi: pairAbi, address: pairAddress };
+
   const overviewResults = await client.multicall({
     contracts: [
       { ...vyTokenConfig, functionName: 'totalSupply' },
-      { ...vaoConfig, functionName: 'getMTP' }
+      { ...vaoConfig, functionName: 'getMTP' },
+      { ...pairConfig, functionName: 'getReserves' },
+      { ...pairConfig, functionName: 'token0' },
     ],
     allowFailure: true
   });
@@ -151,6 +162,19 @@ const dataResource = createResource(async () => {
   const mtp = overviewResults[1].status === 'success'
     ? overviewResults[1].result
     : (() => { overviewWarnings.push(`getMTP: Uniswap pools likely not configured yet`); return 'Pending configuration'; })();
+
+  const USDC: Currency = { symbol: 'USDC', decimals: 6 };
+  let vyReserve = 0n;
+  let usdcReserve = 0n;
+  if (overviewResults[2].status === 'success' && overviewResults[3].status === 'success') {
+    const [reserve0, reserve1] = overviewResults[2].result as [bigint, bigint, number];
+    const token0 = overviewResults[3].result as Address;
+    const vyIsToken0 = token0.toLowerCase() === vyTokenAddress.toLowerCase();
+    vyReserve = vyIsToken0 ? reserve0 : reserve1;
+    usdcReserve = vyIsToken0 ? reserve1 : reserve0;
+  } else {
+    overviewWarnings.push(`getReserves: Pool pair not available`);
+  }
 
   const tokenHolders = [
     'ValinityYieldTreasury',
@@ -225,6 +249,11 @@ const dataResource = createResource(async () => {
     overviewWarnings,
     hasConfigWarnings,
     balanceMap,
+    pool: {
+      'VY Price': vyReserve > 0n ? new Amount(USD, (usdcReserve * 10n**30n) / vyReserve) : 'No liquidity',
+      'VY Reserve': new Amount(VY, vyReserve),
+      'USDC Reserve': new Amount(USDC, usdcReserve),
+    },
     assets: assets.map(asset => omit(asset, ['currency'])),
   };
 });
@@ -271,8 +300,15 @@ function Content() {
       </div>
 
       <div>
+        <h2>Pool (VY/USDC)</h2>
+        <div className="box">
+          {renderValues(data.pool)}
+        </div>
+      </div>
+
+      <div>
         <h2>Assets</h2>
-        {data.assets.map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
+        {data.assets.filter(a => a.isCollateral).map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
           <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`}>
             <h3>
               {symbol}
