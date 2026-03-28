@@ -100,3 +100,50 @@ th {
   word-break: break-word;
   white-space: normal;
 }
+
+.box--warning {
+  border-left: 3px solid #f39c12;
+  background: #2a2517;
+}
+
+.warning-badge {
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: bold;
+  color: #fff;
+  background: #f39c12;
+  border-radius: 0.25rem;
+  vertical-align: middle;
+}
+
+.warning-list {
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(243, 156, 18, 0.1);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.warning-item {
+  color: #f39c12;
+  padding: 0.15rem 0;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.info-badge {
+  font-size: 0.7rem;
+  font-weight: normal;
+  color: #888;
+}
+
+@media (prefers-color-scheme: light) {
+  .box--warning {
+    background: #fff8e6;
+  }
+
+  .warning-item {
+    color: #b37400;
+  }
+}
