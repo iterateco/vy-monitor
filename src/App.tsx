@@ -1,6 +1,8 @@
+import { lazy, Suspense } from 'react';
 import './App.css';
-import Mainnet from './pages/Mainnet';
-import Testnet from './pages/Testnet';
+
+const Mainnet = lazy(() => import('./pages/Mainnet'));
+const Testnet = lazy(() => import('./pages/Testnet'));
 
 function App() {
   const searchParams = new URLSearchParams(location.search);
@@ -14,7 +16,9 @@ function App() {
         <a href={`?network=${otherNetwork}`}>[{network}]</a>
       </header>
 
-      {network === 'mainnet' ? <Mainnet /> : <Testnet />}
+      <Suspense fallback={<div>Loading...</div>}>
+        {network === 'mainnet' ? <Mainnet /> : <Testnet />}
+      </Suspense>
     </>
   )
 }

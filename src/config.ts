@@ -4,7 +4,7 @@ export const MAINNET_RPC_URL = isDev ? '/api-mainnet/rpc-proxy' : 'https://api.v
 export const TESTNET_RPC_URL = isDev ? '/api-testnet/rpc-proxy' : 'https://api-dev.valinity.io/rpc-proxy'
 
 export const CONTRACT_ACRONYMS: Record<string, string> = {
-  AdminSafe: 'AS',
+  Admin: 'Admin',
   ValinityToken: 'VY',
   ValinityYieldTreasury: 'VYT',
   ValinityReserveTreasury: 'VRT',
@@ -20,5 +20,6 @@ export const CONTRACT_ACRONYMS: Record<string, string> = {
   ValinityMEVBot: 'VMEV',
   ValinityBuybackOfficer: 'VBO',
   ValinityDCAOfficer: 'VDCA',
-  ValinityYieldOfficer: 'VYO'
+  ValinityYieldOfficer: 'VYO',
+  ValinityStakingRouter: 'VSR'
 }

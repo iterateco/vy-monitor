@@ -648,7 +648,7 @@ export default [
         "type": "address"
       }
     ],
-    "name": "getSpotPriceUSD",
+    "name": "getAssetTwapPrice",
     "outputs": [
       {
         "internalType": "uint256",
