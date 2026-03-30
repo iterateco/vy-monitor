@@ -323,10 +323,10 @@ const dataResource = createResource(async () => {
   const vsrDepositsPaused = vsrGet(4, 'depositsPaused', false);
   const vsrWithdrawalsPaused = vsrGet(5, 'withdrawalsPaused', false);
 
-  // VDAX Holdings = totalDaxCredits * daxIndex / 1e18
-  const vdaxHoldings = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
-  // UNI-LP Holdings = totalUniCredits * uniIndex / 1e18
-  const uniLPHoldings = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
+  // VDAX Receivable = totalDaxCredits * daxIndex / 1e18
+  const vdaxReceivable = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
+  // UNI-LP Receivable = totalUniCredits * uniIndex / 1e18
+  const uniLPReceivable = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
 
   // --- Router Token Holdings ---
   const routerAddress = (addresses as Record<string, Address>)['ValinityStakingRouter'];
@@ -377,8 +377,8 @@ const dataResource = createResource(async () => {
         'Total UNI Credits': new Amount({ symbol: '', decimals: 18 }, totalUniCredits),
         'DAX Index': new Amount({ symbol: '×', decimals: 18 }, daxIndex),
         'UNI Index': new Amount({ symbol: '×', decimals: 18 }, uniIndex),
-        'VDAX Holdings': new Amount(VDAX, vdaxHoldings),
-        'UNI-LP Holdings': new Amount(UNI_LP, uniLPHoldings),
+        'VDAX Receivable': new Amount(VDAX, vdaxReceivable),
+        'UNI-LP Receivable': new Amount(UNI_LP, uniLPReceivable),
         'Deposits Paused': vsrDepositsPaused,
         'Withdrawals Paused': vsrWithdrawalsPaused,
       },
@@ -512,9 +512,22 @@ function Content() {
               ))}
             </div>
           )}
-          {renderValues(data.stakingRouter.overview)}
+          {renderValues(data.stakingRouter.overview, undefined, {
+            'Total DAX Credits': 'Sum of all stakers\' DAX credit shares in the router',
+            'Total UNI Credits': 'Sum of all stakers\' UNI-LP credit shares in the router',
+            'DAX Index': 'Conversion ratio from DAX credits to VDAX tokens (grows over time with yield)',
+            'UNI Index': 'Conversion ratio from UNI credits to UNI-LP tokens (grows over time with yield)',
+            'VDAX Receivable': 'Total VDAX owed to stakers (Total DAX Credits × DAX Index)',
+            'UNI-LP Receivable': 'Total UNI-LP owed to stakers (Total UNI Credits × UNI Index)',
+            'Deposits Paused': 'Whether new staking deposits are currently accepted',
+            'Withdrawals Paused': 'Whether staking withdrawals are currently allowed',
+          })}
           <h3 style={{ marginTop: '12px' }}>Token Holdings</h3>
-          {renderValues(data.stakingRouter.tokenHoldings)}
+          {renderValues(data.stakingRouter.tokenHoldings, undefined, {
+            'VDAX Balance': 'Actual VDAX token balance held by the router contract',
+            'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
+            'VY Balance': 'Actual VY token balance held by the router contract',
+          })}
         </div>
       </div>
 
@@ -538,7 +551,8 @@ function Content() {
 
 function renderValues(
   data: object,
-  transform?: (key: string, value: unknown) => unknown
+  transform?: (key: string, value: unknown) => unknown,
+  tooltips?: Record<string, string>
 ): JSX.Element {
   return (
     <table>
@@ -546,7 +560,7 @@ function renderValues(
         {Object.entries(data).map(([key, value]) => (
           <tr key={key}>
             <td >
-              <strong>{startCase(key)}</strong>
+              <strong title={tooltips?.[key]}  style={tooltips?.[key] ? { cursor: 'help', borderBottom: '1px dotted #888' } : undefined}>{startCase(key)}</strong>
             </td>
             <td>
               <Value>{transform ? transform(key, value) : value}</Value>
