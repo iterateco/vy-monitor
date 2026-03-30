@@ -49,13 +49,11 @@ const dataResource = createResource(async () => {
       { ...tokenConfig, functionName: 'symbol' },
     ];
 
-    // Collateral-only calls: spotPrice, assetView, ltvf, cap, collateralized
+    // Collateral-only calls: spotPrice, assetView, assetMetrics
     const collateralContracts = isCollateral ? [
       { ...vaoConfig, functionName: 'getAssetTwapPrice', args: [assetAddr] },
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
-      { ...vcoConfig, functionName: 'getLTVF', args: [assetAddr] },
-      { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
-      { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] }
+      { ...vcoConfig, functionName: 'getAssetMetrics', args: [assetAddr] },
     ] : [];
 
     const results = await client.multicall({
@@ -70,7 +68,7 @@ const dataResource = createResource(async () => {
       if (r.status === 'success') return r.result as T;
       // For collateral: spot price / LTVF reverts are warnings (pool not configured), not errors
       const msg = `${label}: ${(r.error as Error).message ?? 'reverted'}`;
-      if (label === 'getAssetTwapPrice' || label === 'getLTVF') {
+      if (label === 'getAssetTwapPrice' || label === 'getAssetMetrics') {
         warnings.push(msg);
       } else {
         errors.push(msg);
@@ -104,15 +102,17 @@ const dataResource = createResource(async () => {
       }
     }
 
-    // Collateral asset — parse remaining results (indices 2..6)
+    // Collateral asset — parse remaining results (indices 2..4)
     const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as unknown as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
       : (() => { errors.push(`getAssetView: ${(results[3].error as Error).message ?? 'reverted'}`); return { ltv: 0n, reserveBalance: 0n, totalLoaned: 0n }; })();
-    const { ltv, reserveBalance, totalLoaned } = assetView;
-    const ltvf = get(4, 'getLTVF', 0n);
-    const cap = get(5, 'getAssetCap', 0n);
-    const collateralized = get(6, 'getAssetCollateralized', 0n);
+    const { reserveBalance, totalLoaned } = assetView;
+    const defaultMetrics = { totalReserve: 0n, collateralCap: 0n, ltvRatio: 0n, ltvF: 0n, utilized: 0n, available: 0n };
+    const metrics = results[4].status === 'success'
+      ? results[4].result as unknown as typeof defaultMetrics
+      : (() => { warnings.push(`getAssetMetrics: ${(results[4].error as Error).message ?? 'reverted'}`); return defaultMetrics; })();
+    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: cap, utilized: collateralized } = metrics;
 
     const scaleFactor = BigInt(10) ** BigInt(18 - decimals);
 

@@ -499,6 +499,33 @@ export default [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "asset",
+        "type": "address"
+      }
+    ],
+    "name": "getAssetMetrics",
+    "outputs": [
+      {
+        "components": [
+          { "internalType": "uint256", "name": "totalReserve", "type": "uint256" },
+          { "internalType": "uint256", "name": "collateralCap", "type": "uint256" },
+          { "internalType": "uint256", "name": "ltvRatio", "type": "uint256" },
+          { "internalType": "uint256", "name": "ltvF", "type": "uint256" },
+          { "internalType": "uint256", "name": "utilized", "type": "uint256" },
+          { "internalType": "uint256", "name": "available", "type": "uint256" }
+        ],
+        "internalType": "struct ValinityCapOfficer.AssetMetrics",
+        "name": "",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "getRegistrar",
     "outputs": [
