@@ -326,10 +326,10 @@ const dataResource = createResource(async () => {
   const vsrDepositsPaused = vsrGet(4, 'depositsPaused', false);
   const vsrWithdrawalsPaused = vsrGet(5, 'withdrawalsPaused', false);
 
-  // Total VDAX claim = totalDaxCredits * daxIndex / 1e18
-  const totalVDAXClaim = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
-  // Total UNI-LP claim = totalUniCredits * uniIndex / 1e18
-  const totalUniLPClaim = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
+  // VDAX Holdings = totalDaxCredits * daxIndex / 1e18
+  const vdaxHoldings = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
+  // UNI-LP Holdings = totalUniCredits * uniIndex / 1e18
+  const uniLPHoldings = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
 
   return {
     overview: {
@@ -361,12 +361,12 @@ const dataResource = createResource(async () => {
     },
     stakingRouter: {
       overview: {
-        'Total DAX Credits': new Amount({ symbol: 'credits', decimals: 18 }, totalDaxCredits),
-        'Total UNI Credits': new Amount({ symbol: 'credits', decimals: 18 }, totalUniCredits),
+        'Total DAX Credits': new Amount({ symbol: '', decimals: 18 }, totalDaxCredits),
+        'Total UNI Credits': new Amount({ symbol: '', decimals: 18 }, totalUniCredits),
         'DAX Index': new Amount({ symbol: '×', decimals: 18 }, daxIndex),
         'UNI Index': new Amount({ symbol: '×', decimals: 18 }, uniIndex),
-        'Total VDAX Claim': new Amount(VDAX, totalVDAXClaim),
-        'Total UNI-LP Claim': new Amount(UNI_LP, totalUniLPClaim),
+        'VDAX Holdings': new Amount(VDAX, vdaxHoldings),
+        'UNI-LP Holdings': new Amount(UNI_LP, uniLPHoldings),
         'Deposits Paused': vsrDepositsPaused,
         'Withdrawals Paused': vsrWithdrawalsPaused,
       },
