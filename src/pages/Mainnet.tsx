@@ -53,7 +53,7 @@ const dataResource = createResource(async () => {
     const collateralContracts = isCollateral ? [
       { ...vaoConfig, functionName: 'getAssetTwapPrice', args: [assetAddr] },
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
-      { ...vaoConfig, functionName: 'getLTVF', args: [assetAddr] },
+      { ...vcoConfig, functionName: 'getLTVF', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] }
     ] : [];
