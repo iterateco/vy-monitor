@@ -14,8 +14,10 @@ export function formatValue(value: unknown, options?: FormatValueOptions) {
     value = parseFloat(formatUnits(value, currency?.decimals ?? etherUnits.wei));
   }
   if (typeof value === 'number') {
+    const fractionDigits = currency?.symbol === 'USD' ? 2 : 18;
     formatted = value.toLocaleString('en', {
-      maximumFractionDigits: 18
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits
     });
   } else {
     formatted = String(value);
