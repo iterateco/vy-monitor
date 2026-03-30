@@ -38,6 +38,8 @@ const dataResource = createResource(async () => {
   const vaoConfig = getContractConfig('ValinityAcquisitionOfficer');
   const vcoConfig = getContractConfig('ValinityCapOfficer');
   const vloConfig = getContractConfig('ValinityLoanOfficer');
+  const daxConfig = getContractConfig('ValinityDAX');
+  const vsrConfig = getContractConfig('ValinityStakingRouter');
 
   const assets = await Promise.all(assetEntries.map(async ([assetKey, assetAddr]) => {
     const tokenConfig = getContractConfig('ERC20', assetAddr);
@@ -241,6 +243,94 @@ const dataResource = createResource(async () => {
   const hasConfigWarnings = overviewWarnings.length > 0 ||
     assets.some(a => a.isCollateral && a.warnings && a.warnings.length > 0);
 
+  // --- DAX ---
+  const daxErrors: string[] = [];
+  const daxBaseResults = await client.multicall({
+    contracts: [
+      { ...daxConfig, functionName: 'getNumPools' },
+      { ...daxConfig, functionName: 'getTotalVYReserves' },
+      { ...daxConfig, functionName: 'depositsPaused' },
+      { ...daxConfig, functionName: 'withdrawalsPaused' },
+      { ...daxConfig, functionName: 'swapsPaused' },
+    ],
+    allowFailure: true
+  });
+
+  const daxGet = <T,>(idx: number, label: string, fallback: T): T => {
+    const r = daxBaseResults[idx];
+    if (r.status === 'success') return r.result as T;
+    daxErrors.push(`${label}: ${(r.error as Error).message ?? 'reverted'}`);
+    return fallback;
+  };
+
+  const numPools = daxGet(0, 'getNumPools', 0n);
+  const totalVYReserves = daxGet(1, 'getTotalVYReserves', 0n);
+  const daxDepositsPaused = daxGet(2, 'depositsPaused', false);
+  const daxWithdrawalsPaused = daxGet(3, 'withdrawalsPaused', false);
+  const daxSwapsPaused = daxGet(4, 'swapsPaused', false);
+
+  // Fetch each pool's reserves
+  type DaxPool = { asset: Address; symbol: string; reserveVY: Amount<bigint>; reserveAsset: Amount<bigint> };
+  const daxPools: DaxPool[] = [];
+  if (numPools > 0n) {
+    const poolContracts = [];
+    for (let i = 0n; i < numPools; i++) {
+      poolContracts.push({ ...daxConfig, functionName: 'getPoolReserves', args: [i] });
+    }
+    const poolResults = await client.multicall({ contracts: poolContracts, allowFailure: true });
+    for (let i = 0; i < poolResults.length; i++) {
+      const r = poolResults[i];
+      if (r.status === 'success') {
+        const [asset, reserveVY, reserveAsset] = r.result as [Address, bigint, bigint];
+        // Find the asset symbol/decimals from our asset list
+        const known = assets.find(a => a.address.toLowerCase() === asset.toLowerCase());
+        const symbol = known?.symbol ?? asset.slice(0, 10);
+        const currency = known?.currency ?? { symbol, decimals: 18 };
+        daxPools.push({
+          asset,
+          symbol,
+          reserveVY: new Amount(VY, reserveVY),
+          reserveAsset: new Amount(currency, reserveAsset),
+        });
+      } else {
+        daxErrors.push(`getPoolReserves(${i}): ${(r.error as Error).message ?? 'reverted'}`);
+      }
+    }
+  }
+
+  // --- Staking Router ---
+  const vsrErrors: string[] = [];
+  const vsrResults = await client.multicall({
+    contracts: [
+      { ...vsrConfig, functionName: 'totalDaxCredits' },
+      { ...vsrConfig, functionName: 'totalUniCredits' },
+      { ...vsrConfig, functionName: 'daxIndex' },
+      { ...vsrConfig, functionName: 'uniIndex' },
+      { ...vsrConfig, functionName: 'depositsPaused' },
+      { ...vsrConfig, functionName: 'withdrawalsPaused' },
+    ],
+    allowFailure: true
+  });
+
+  const vsrGet = <T,>(idx: number, label: string, fallback: T): T => {
+    const r = vsrResults[idx];
+    if (r.status === 'success') return r.result as T;
+    vsrErrors.push(`${label}: ${(r.error as Error).message ?? 'reverted'}`);
+    return fallback;
+  };
+
+  const totalDaxCredits = vsrGet(0, 'totalDaxCredits', 0n);
+  const totalUniCredits = vsrGet(1, 'totalUniCredits', 0n);
+  const daxIndex = vsrGet(2, 'daxIndex', 0n);
+  const uniIndex = vsrGet(3, 'uniIndex', 0n);
+  const vsrDepositsPaused = vsrGet(4, 'depositsPaused', false);
+  const vsrWithdrawalsPaused = vsrGet(5, 'withdrawalsPaused', false);
+
+  // Effective VY staked = totalDaxCredits * daxIndex / 1e18
+  const effectiveVYStaked = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
+  // Effective LP staked = totalUniCredits * uniIndex / 1e18
+  const effectiveLPStaked = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
+
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
@@ -258,6 +348,30 @@ const dataResource = createResource(async () => {
       'USDC Reserve': new Amount(USDC, usdcReserve),
     },
     assets: assets.map(asset => omit(asset, ['currency'])),
+    dax: {
+      overview: {
+        'Num Pools': Number(numPools),
+        'Total VY Reserves': new Amount(VY, totalVYReserves),
+        'Deposits Paused': daxDepositsPaused,
+        'Withdrawals Paused': daxWithdrawalsPaused,
+        'Swaps Paused': daxSwapsPaused,
+      },
+      pools: daxPools,
+      errors: daxErrors,
+    },
+    stakingRouter: {
+      overview: {
+        'Total DAX Credits': new Amount(VY, totalDaxCredits),
+        'Total UNI Credits': new Amount(VY, totalUniCredits),
+        'DAX Index': new Amount(VY, daxIndex),
+        'UNI Index': new Amount(VY, uniIndex),
+        'Effective VY Staked': new Amount(VY, effectiveVYStaked),
+        'Effective LP Staked': new Amount(VY, effectiveLPStaked),
+        'Deposits Paused': vsrDepositsPaused,
+        'Withdrawals Paused': vsrWithdrawalsPaused,
+      },
+      errors: vsrErrors,
+    },
   };
 });
 
@@ -340,6 +454,49 @@ function Content() {
             {renderValues(values)}
           </div>
         ))}
+      </div>
+
+      <div>
+        <h2>DAX</h2>
+        <div className={`box ${data.dax.errors.length > 0 ? 'box--error' : ''}`}>
+          {data.dax.errors.length > 0 && (
+            <div className="error-list">
+              {data.dax.errors.map((err, i) => (
+                <div key={i} className="error-item">✗ {err}</div>
+              ))}
+            </div>
+          )}
+          {renderValues(data.dax.overview)}
+          {data.dax.pools.length > 0 && (
+            <>
+              <h3 style={{ marginTop: '12px' }}>Pools</h3>
+              {data.dax.pools.map((pool) => (
+                <div key={pool.symbol} className="box" style={{ marginTop: '8px' }}>
+                  <h4>{pool.symbol}</h4>
+                  {renderValues({
+                    'Asset Address': pool.asset,
+                    'VY Reserve': pool.reserveVY,
+                    'Asset Reserve': pool.reserveAsset,
+                  })}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h2>Staking Router</h2>
+        <div className={`box ${data.stakingRouter.errors.length > 0 ? 'box--error' : ''}`}>
+          {data.stakingRouter.errors.length > 0 && (
+            <div className="error-list">
+              {data.stakingRouter.errors.map((err, i) => (
+                <div key={i} className="error-item">✗ {err}</div>
+              ))}
+            </div>
+          )}
+          {renderValues(data.stakingRouter.overview)}
+        </div>
       </div>
 
       {data.hasConfigWarnings && (
