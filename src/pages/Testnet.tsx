@@ -331,6 +331,21 @@ const dataResource = createResource(async () => {
   // UNI-LP Holdings = totalUniCredits * uniIndex / 1e18
   const uniLPHoldings = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
 
+  // --- Router Token Holdings ---
+  const routerAddress = (addresses as Record<string, Address>)['ValinityStakingRouter'];
+  const vdaxAddress = (addresses as Record<string, Address>)['VDAX'];
+  const routerBalanceResults = await client.multicall({
+    contracts: [
+      { abi: abis.ERC20, address: vdaxAddress, functionName: 'balanceOf', args: [routerAddress] },
+      { abi: abis.ERC20, address: pairAddress, functionName: 'balanceOf', args: [routerAddress] },
+      { ...vyTokenConfig, functionName: 'balanceOf', args: [routerAddress] },
+    ],
+    allowFailure: true
+  });
+  const routerVDAX = routerBalanceResults[0].status === 'success' ? routerBalanceResults[0].result as bigint : (() => { vsrErrors.push('VDAX.balanceOf(router): reverted'); return 0n; })();
+  const routerUniLP = routerBalanceResults[1].status === 'success' ? routerBalanceResults[1].result as bigint : (() => { vsrErrors.push('UNI-LP.balanceOf(router): reverted'); return 0n; })();
+  const routerVY = routerBalanceResults[2].status === 'success' ? routerBalanceResults[2].result as bigint : (() => { vsrErrors.push('VY.balanceOf(router): reverted'); return 0n; })();
+
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
@@ -369,6 +384,11 @@ const dataResource = createResource(async () => {
         'UNI-LP Holdings': new Amount(UNI_LP, uniLPHoldings),
         'Deposits Paused': vsrDepositsPaused,
         'Withdrawals Paused': vsrWithdrawalsPaused,
+      },
+      tokenHoldings: {
+        'VDAX Balance': new Amount(VDAX, routerVDAX),
+        'UNI-LP Balance': new Amount(UNI_LP, routerUniLP),
+        'VY Balance': new Amount(VY, routerVY),
       },
       errors: vsrErrors,
     },
@@ -496,6 +516,8 @@ function Content() {
             </div>
           )}
           {renderValues(data.stakingRouter.overview)}
+          <h3 style={{ marginTop: '12px' }}>Token Holdings</h3>
+          {renderValues(data.stakingRouter.tokenHoldings)}
         </div>
       </div>
 
