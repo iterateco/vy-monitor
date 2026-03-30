@@ -6,7 +6,7 @@ import { createPublicClient, http, type Address } from 'viem';
 import { sepolia } from 'viem/chains';
 import { Value } from '../components/core';
 import { CONTRACT_ACRONYMS, TESTNET_RPC_URL } from '../config';
-import { Amount, USD, VY } from '../models';
+import { Amount, USD, VY, VDAX, UNI_LP } from '../models';
 import type { Currency } from '../models';
 import networks from '../networks';
 import createResource from '../utils/createResource';
@@ -326,10 +326,10 @@ const dataResource = createResource(async () => {
   const vsrDepositsPaused = vsrGet(4, 'depositsPaused', false);
   const vsrWithdrawalsPaused = vsrGet(5, 'withdrawalsPaused', false);
 
-  // Effective VY staked = totalDaxCredits * daxIndex / 1e18
-  const effectiveVYStaked = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
-  // Effective LP staked = totalUniCredits * uniIndex / 1e18
-  const effectiveLPStaked = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
+  // Total VDAX claim = totalDaxCredits * daxIndex / 1e18
+  const totalVDAXClaim = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
+  // Total UNI-LP claim = totalUniCredits * uniIndex / 1e18
+  const totalUniLPClaim = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
 
   return {
     overview: {
@@ -361,12 +361,12 @@ const dataResource = createResource(async () => {
     },
     stakingRouter: {
       overview: {
-        'Total DAX Credits': new Amount(VY, totalDaxCredits),
-        'Total UNI Credits': new Amount(VY, totalUniCredits),
-        'DAX Index': new Amount(VY, daxIndex),
-        'UNI Index': new Amount(VY, uniIndex),
-        'Effective VY Staked': new Amount(VY, effectiveVYStaked),
-        'Effective LP Staked': new Amount(VY, effectiveLPStaked),
+        'Total DAX Credits': new Amount({ symbol: 'credits', decimals: 18 }, totalDaxCredits),
+        'Total UNI Credits': new Amount({ symbol: 'credits', decimals: 18 }, totalUniCredits),
+        'DAX Index': new Amount({ symbol: '×', decimals: 18 }, daxIndex),
+        'UNI Index': new Amount({ symbol: '×', decimals: 18 }, uniIndex),
+        'Total VDAX Claim': new Amount(VDAX, totalVDAXClaim),
+        'Total UNI-LP Claim': new Amount(UNI_LP, totalUniLPClaim),
         'Deposits Paused': vsrDepositsPaused,
         'Withdrawals Paused': vsrWithdrawalsPaused,
       },
