@@ -281,7 +281,7 @@ const dataResource = createResource(async () => {
     for (let i = 0; i < poolResults.length; i++) {
       const r = poolResults[i];
       if (r.status === 'success') {
-        const [asset, reserveVY, reserveAsset] = r.result as [Address, bigint, bigint];
+        const [asset, reserveVY, reserveAsset] = r.result as unknown as [Address, bigint, bigint];
         // Find the asset symbol/decimals from our asset list
         const known = assets.find(a => a.address.toLowerCase() === asset.toLowerCase());
         const symbol = known?.symbol ?? asset.slice(0, 10);
