@@ -5,7 +5,7 @@ import { Suspense, type JSX } from 'react';
 import { createPublicClient, http, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
-import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
+import { CONTRACT_ACRONYMS, MAINNET_RPC_URL, MAINNET_API_URL } from '../config';
 import { Amount, USD, VY, VDAX, UNI_LP } from '../models';
 import type { Currency } from '../models';
 import networks from '../networks';
@@ -148,29 +148,32 @@ const dataResource = createResource(async () => {
   ] as const;
   const pairConfig = { abi: pairAbi, address: pairAddress };
 
-  const overviewResults = await client.multicall({
-    contracts: [
-      { ...vyTokenConfig, functionName: 'totalSupply' },
-      { ...vaoConfig, functionName: 'getMTP' },
-      { ...pairConfig, functionName: 'getReserves' },
-      { ...pairConfig, functionName: 'token0' },
-    ],
-    allowFailure: true
-  });
+  const [overviewResults, mtpResponse] = await Promise.all([
+    client.multicall({
+      contracts: [
+        { ...vyTokenConfig, functionName: 'totalSupply' },
+        { ...pairConfig, functionName: 'getReserves' },
+        { ...pairConfig, functionName: 'token0' },
+      ],
+      allowFailure: true
+    }),
+    fetch(`${MAINNET_API_URL}/market-data?count=1`).then(r => r.json()).catch(() => null),
+  ]);
 
   const vyTotalSupply = overviewResults[0].status === 'success'
     ? overviewResults[0].result as bigint
     : (() => { overviewErrors.push(`totalSupply: ${(overviewResults[0].error as Error).message ?? 'reverted'}`); return 0n; })();
-  const mtp = overviewResults[1].status === 'success'
-    ? overviewResults[1].result
-    : (() => { overviewWarnings.push(`getMTP: Uniswap pools likely not configured yet`); return 'Pending configuration'; })();
+  const mtpPrice = mtpResponse?.data?.[0]?.price;
+  const mtp = mtpPrice != null
+    ? new Amount(USD, BigInt(Math.round(parseFloat(mtpPrice) * 1e18)))
+    : (() => { overviewWarnings.push(`MTP: Could not fetch from API`); return 'Unavailable' as const; })();
 
   const USDC: Currency = { symbol: 'USDC', decimals: 6 };
   let vyReserve = 0n;
   let usdcReserve = 0n;
-  if (overviewResults[2].status === 'success' && overviewResults[3].status === 'success') {
-    const [reserve0, reserve1] = overviewResults[2].result as [bigint, bigint, number];
-    const token0 = overviewResults[3].result as Address;
+  if (overviewResults[1].status === 'success' && overviewResults[2].status === 'success') {
+    const [reserve0, reserve1] = overviewResults[1].result as [bigint, bigint, number];
+    const token0 = overviewResults[2].result as Address;
     const vyIsToken0 = token0.toLowerCase() === vyTokenAddress.toLowerCase();
     vyReserve = vyIsToken0 ? reserve0 : reserve1;
     usdcReserve = vyIsToken0 ? reserve1 : reserve0;

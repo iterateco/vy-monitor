@@ -597,19 +597,6 @@ export default [
   },
   {
     "inputs": [],
-    "name": "getMTP",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "mtp",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
     "name": "getRegistrar",
     "outputs": [
       {
