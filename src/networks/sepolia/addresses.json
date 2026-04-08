@@ -17,5 +17,6 @@
   "ValinityBuybackOfficer": "0xdb2DA6197CC8C0b853e22c5f0a8b327d3668316D",
   "ValinityDCAOfficer": "0xaff8ABb1fa4dc1cc937e4Fb6285c57B638649a6a",
   "ValinityYieldOfficer": "0xd3394881031120C358669c7cfC7Ea7E5e8D1A770",
-  "ValinityStakingRouter": "0x5d31a31B61DF1C14081b6E70664f86b659Fba252"
+  "ValinityStakingRouter": "0x5d31a31B61DF1C14081b6E70664f86b659Fba252",
+  "VyUsdcPool": "0x5aCa157B6c6FBdE7E833Ea007E6E17068dB61D6f"
 }
