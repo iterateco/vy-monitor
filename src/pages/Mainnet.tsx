@@ -163,7 +163,7 @@ const dataResource = createResource(async () => {
   const vyTotalSupply = overviewResults[0].status === 'success'
     ? overviewResults[0].result as bigint
     : (() => { overviewErrors.push(`totalSupply: ${(overviewResults[0].error as Error).message ?? 'reverted'}`); return 0n; })();
-  const mtpPrice = mtpResponse?.data?.[0]?.price;
+  const mtpPrice = mtpResponse?.data?.[0]?.market_trigger_price;
   const mtp = mtpPrice != null
     ? new Amount(USD, BigInt(Math.round(parseFloat(mtpPrice) * 1e18)))
     : (() => { overviewWarnings.push(`MTP: Could not fetch from API`); return 'Unavailable' as const; })();
