@@ -326,11 +326,6 @@ const dataResource = createResource(async () => {
   const vsrDepositsPaused = vsrGet(4, 'depositsPaused', false);
   const vsrWithdrawalsPaused = vsrGet(5, 'withdrawalsPaused', false);
 
-  // VDAX Receivable = totalDaxCredits * daxIndex / 1e18
-  const vdaxReceivable = daxIndex > 0n ? (totalDaxCredits * daxIndex) / BigInt(1e18) : 0n;
-  // UNI-LP Receivable = totalUniCredits * uniIndex / 1e18
-  const uniLPReceivable = uniIndex > 0n ? (totalUniCredits * uniIndex) / BigInt(1e18) : 0n;
-
   // --- Router Token Holdings ---
   const routerAddress = (addresses as Record<string, Address>)['ValinityStakingRouter'];
   const vdaxAddress = (addresses as Record<string, Address>)['VDAX'];
@@ -380,8 +375,6 @@ const dataResource = createResource(async () => {
         'Total UNI Credits': new Amount({ symbol: '', decimals: 18 }, totalUniCredits),
         'DAX Index': new Amount({ symbol: '×', decimals: 18 }, daxIndex),
         'UNI Index': new Amount({ symbol: '×', decimals: 18 }, uniIndex),
-        'VDAX Receivable': new Amount(VDAX, vdaxReceivable),
-        'UNI-LP Receivable': new Amount(UNI_LP, uniLPReceivable),
         'Deposits Paused': vsrDepositsPaused,
         'Withdrawals Paused': vsrWithdrawalsPaused,
       },
@@ -520,8 +513,6 @@ function Content() {
             'Total UNI Credits': 'Sum of all stakers\' UNI-LP credit shares in the router',
             'DAX Index': 'Conversion ratio from DAX credits to VDAX tokens (grows over time with yield)',
             'UNI Index': 'Conversion ratio from UNI credits to UNI-LP tokens (grows over time with yield)',
-            'VDAX Receivable': 'Total VDAX owed to stakers (Total DAX Credits × DAX Index)',
-            'UNI-LP Receivable': 'Total UNI-LP owed to stakers (Total UNI Credits × UNI Index)',
             'Deposits Paused': 'Whether new staking deposits are currently accepted',
             'Withdrawals Paused': 'Whether staking withdrawals are currently allowed',
           })}
