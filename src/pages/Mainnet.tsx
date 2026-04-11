@@ -148,7 +148,7 @@ const dataResource = createResource(async () => {
   ] as const;
   const pairConfig = { abi: pairAbi, address: pairAddress };
 
-  const [overviewResults, mtpResponse] = await Promise.all([
+  const [overviewResults, mtpResponse, stakingStatsResponse] = await Promise.all([
     client.multicall({
       contracts: [
         { ...vyTokenConfig, functionName: 'totalSupply' },
@@ -158,6 +158,7 @@ const dataResource = createResource(async () => {
       allowFailure: true
     }),
     fetch(`${MAINNET_API_URL}/market-data?count=1`).then(r => r.json()).catch(() => null),
+    fetch(`${MAINNET_API_URL}/staking/stats`).then(r => r.json()).catch(() => null),
   ]);
 
   const vyTotalSupply = overviewResults[0].status === 'success'
@@ -329,17 +330,27 @@ const dataResource = createResource(async () => {
   // --- Router Token Holdings ---
   const routerAddress = (addresses as Record<string, Address>)['ValinityStakingRouter'];
   const vdaxAddress = (addresses as Record<string, Address>)['VDAX'];
+  const daxAddress = (addresses as Record<string, Address>)['ValinityDAX'];
   const routerBalanceResults = await client.multicall({
     contracts: [
       { abi: abis.ERC20, address: vdaxAddress, functionName: 'balanceOf', args: [routerAddress] },
       { abi: abis.ERC20, address: pairAddress, functionName: 'balanceOf', args: [routerAddress] },
-      { ...vyTokenConfig, functionName: 'balanceOf', args: [routerAddress] },
+      { ...vyTokenConfig, functionName: 'balanceOf', args: [daxAddress] },
+      { ...vyTokenConfig, functionName: 'balanceOf', args: [pairAddress] },
     ],
     allowFailure: true
   });
   const routerVDAX = routerBalanceResults[0].status === 'success' ? routerBalanceResults[0].result as bigint : (() => { vsrErrors.push('VDAX.balanceOf(router): reverted'); return 0n; })();
   const routerUniLP = routerBalanceResults[1].status === 'success' ? routerBalanceResults[1].result as bigint : (() => { vsrErrors.push('UNI-LP.balanceOf(router): reverted'); return 0n; })();
-  const routerVY = routerBalanceResults[2].status === 'success' ? routerBalanceResults[2].result as bigint : (() => { vsrErrors.push('VY.balanceOf(router): reverted'); return 0n; })();
+  const vyInDax = routerBalanceResults[2].status === 'success' ? routerBalanceResults[2].result as bigint : (() => { vsrErrors.push('VY.balanceOf(DAX): reverted'); return 0n; })();
+  const vyInPair = routerBalanceResults[3].status === 'success' ? routerBalanceResults[3].result as bigint : (() => { vsrErrors.push('VY.balanceOf(pair): reverted'); return 0n; })();
+  const vyInPools = vyInDax + vyInPair;
+
+  // Net VY Staked (from API: deposits - withdrawals)
+  const netVyStakedRaw = stakingStatsResponse?.data?.net_vy_staked;
+  const netVyStaked = netVyStakedRaw != null
+    ? new Amount(VY, BigInt(Math.round(parseFloat(netVyStakedRaw) * 1e18)))
+    : 'Unavailable' as const;
 
   return {
     overview: {
@@ -381,7 +392,8 @@ const dataResource = createResource(async () => {
       tokenHoldings: {
         'VDAX Balance': new Amount(VDAX, routerVDAX),
         'UNI-LP Balance': new Amount(UNI_LP, routerUniLP),
-        'VY Balance': new Amount(VY, routerVY),
+        'VY in Pools': new Amount(VY, vyInPools),
+        'Net VY Staked': netVyStaked,
       },
       errors: vsrErrors,
     },
@@ -520,7 +532,8 @@ function Content() {
           {renderValues(data.stakingRouter.tokenHoldings, undefined, {
             'VDAX Balance': 'Actual VDAX token balance held by the router contract',
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
-            'VY Balance': 'Actual VY token balance held by the router contract',
+            'VY in Pools': 'Total VY held across ValinityDAX and the USDC LP pair',
+            'Net VY Staked': 'Cumulative VY deposited minus VY withdrawn through the staking router',
           })}
         </div>
       </div>
