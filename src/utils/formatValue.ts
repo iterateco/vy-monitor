@@ -14,7 +14,7 @@ export function formatValue(value: unknown, options?: FormatValueOptions) {
     value = parseFloat(formatUnits(value, currency?.decimals ?? etherUnits.wei));
   }
   if (typeof value === 'number') {
-    const fractionDigits = (currency?.symbol === 'USD' || currency?.symbol === 'USDC') ? 2 : 5;
+    const fractionDigits = (currency?.symbol === 'USD' || currency?.symbol === 'USDC') ? 3 : 5;
     formatted = value.toLocaleString('en', {
       minimumFractionDigits: fractionDigits,
       maximumFractionDigits: fractionDigits
