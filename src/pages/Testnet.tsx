@@ -1,7 +1,7 @@
 import flatten from 'lodash/flatten';
 import omit from 'lodash/omit';
 import startCase from 'lodash/startCase';
-import { Suspense, type JSX } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { createPublicClient, http, type Address } from 'viem';
 import { sepolia } from 'viem/chains';
 import { Value } from '../components/core';
@@ -9,7 +9,7 @@ import { CONTRACT_ACRONYMS, TESTNET_RPC_URL, TESTNET_API_URL } from '../config';
 import { Amount, USD, VY, VDAX, UNI_LP } from '../models';
 import type { Currency } from '../models';
 import networks from '../networks';
-import createResource from '../utils/createResource';
+
 
 /**
  * Assets soportados como colateral (LoanOfficer, CapOfficer, AcquisitionOfficer).
@@ -22,7 +22,7 @@ const client = createPublicClient({
   transport: http(TESTNET_RPC_URL),
 });
 
-const dataResource = createResource(async () => {
+const fetchData = async () => {
   const networkName = 'sepolia';
   const { abis, addresses, assets: assetAddresses } = networks[networkName];
   const assetEntries = Object.entries(assetAddresses) as [string, Address][];
@@ -187,7 +187,6 @@ const dataResource = createResource(async () => {
     'ValinityReserveTreasury',
     'ValinityCapOfficer',
     'ValinityPortal',
-    'Admin',
     'ValinityDAX',
     'ValinityBuybackOfficer',
     'ValinityStakingRouter'
@@ -401,18 +400,32 @@ const dataResource = createResource(async () => {
       errors: vsrErrors,
     },
   };
-});
+};
+
+type MonitorData = Awaited<ReturnType<typeof fetchData>>;
 
 export default function Testnet() {
-  return (
-    <Suspense fallback={<p style={{ textAlign: 'center' }}>Loading...</p>}>
-      <Content />
-    </Suspense>
-  )
+  const [data, setData] = useState<MonitorData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      fetchData()
+        .then(d => { if (active) setData(d); })
+        .catch(e => { if (active) setError(e.message); });
+    };
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
+  if (error) return <p style={{ textAlign: 'center', color: 'red' }}>Error: {error}</p>;
+  if (!data) return <p style={{ textAlign: 'center' }}>Loading...</p>;
+  return <Content data={data} />;
 }
 
-function Content() {
-  const data = dataResource.read();
+function Content({ data }: { data: MonitorData }) {
 
   return (
     <div className="monitor">
