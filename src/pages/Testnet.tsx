@@ -536,7 +536,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>DAX</h2>
+        <h2>Valinity Arbitrage Exchange</h2>
         <div className={`box ${data.dax.errors.length > 0 ? 'box--error' : ''}`}>
           {data.dax.errors.length > 0 && (
             <div className="error-list">
