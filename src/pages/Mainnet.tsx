@@ -352,6 +352,27 @@ const fetchData = async () => {
     ? new Amount(VY, BigInt(Math.round(parseFloat(netVyStakedRaw) * 1e18)))
     : 'Unavailable' as const;
 
+  // --- Buyback ---
+  const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
+  const buybackBalanceResult = await client.multicall({
+    contracts: [
+      { ...vyTokenConfig, functionName: 'balanceOf', args: [buybackAddress] },
+    ],
+    allowFailure: true
+  });
+  const buybackVyBalance = buybackBalanceResult[0].status === 'success'
+    ? buybackBalanceResult[0].result as bigint
+    : 0n;
+  const collateralLTVFs = assets
+    .filter(a => a.isCollateral && a.LTVF.value > 0n)
+    .map(a => a.LTVF.value);
+  const lowestLTVF = collateralLTVFs.length > 0
+    ? collateralLTVFs.reduce((min, v) => v < min ? v : min)
+    : 0n;
+  const buybackBuyingPower = lowestLTVF > 0n
+    ? (buybackVyBalance * lowestLTVF) / BigInt(1e18)
+    : 0n;
+
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
@@ -396,6 +417,10 @@ const fetchData = async () => {
         'Net VY Staked': netVyStaked,
       },
       errors: vsrErrors,
+    },
+    buyback: {
+      'VY Holdings': new Amount(VY, buybackVyBalance),
+      'Buying Power': new Amount(USD, buybackBuyingPower),
     },
   };
 };
@@ -459,6 +484,13 @@ function Content({ data }: { data: MonitorData }) {
         <h2>Pool (VY/USDC)</h2>
         <div className="box">
           {renderValues(data.pool)}
+        </div>
+      </div>
+
+      <div>
+        <h2>Buyback</h2>
+        <div className="box">
+          {renderValues(data.buyback)}
         </div>
       </div>
 
