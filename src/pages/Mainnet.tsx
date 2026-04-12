@@ -548,9 +548,9 @@ function Content({ data }: { data: MonitorData }) {
                 <div key={pool.symbol} className="box" style={{ marginTop: '8px' }}>
                   <h4>{pool.symbol}</h4>
                   {renderValues({
-                    'Asset Address': pool.asset,
+                    [`${pool.symbol} Token`]: pool.asset,
                     'VY Reserve': pool.reserveVY,
-                    'Asset Reserve': pool.reserveAsset,
+                    [`${pool.symbol} Reserve`]: pool.reserveAsset,
                   })}
                 </div>
               ))}
