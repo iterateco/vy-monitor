@@ -303,6 +303,7 @@ const fetchData = async () => {
   const vsrErrors: string[] = [];
   const vsrResults = await client.multicall({
     contracts: [
+      { ...vsrConfig, functionName: 'totalStakedVY' },
       { ...vsrConfig, functionName: 'totalDaxCredits' },
       { ...vsrConfig, functionName: 'totalUniCredits' },
       { ...vsrConfig, functionName: 'daxIndex' },
@@ -320,12 +321,13 @@ const fetchData = async () => {
     return fallback;
   };
 
-  const totalDaxCredits = vsrGet(0, 'totalDaxCredits', 0n);
-  const totalUniCredits = vsrGet(1, 'totalUniCredits', 0n);
-  const daxIndex = vsrGet(2, 'daxIndex', 0n);
-  const uniIndex = vsrGet(3, 'uniIndex', 0n);
-  const vsrDepositsPaused = vsrGet(4, 'depositsPaused', false);
-  const vsrWithdrawalsPaused = vsrGet(5, 'withdrawalsPaused', false);
+  const totalStakedVY = vsrGet(0, 'totalStakedVY', 0n);
+  const totalDaxCredits = vsrGet(1, 'totalDaxCredits', 0n);
+  const totalUniCredits = vsrGet(2, 'totalUniCredits', 0n);
+  const daxIndex = vsrGet(3, 'daxIndex', 0n);
+  const uniIndex = vsrGet(4, 'uniIndex', 0n);
+  const vsrDepositsPaused = vsrGet(5, 'depositsPaused', false);
+  const vsrWithdrawalsPaused = vsrGet(6, 'withdrawalsPaused', false);
 
   // --- Router Token Holdings ---
   const routerAddress = (addresses as Record<string, Address>)['ValinityStakingRouter'];
@@ -403,6 +405,7 @@ const fetchData = async () => {
     },
     stakingRouter: {
       overview: {
+        'Total Staked VY': new Amount(VY, totalStakedVY),
         'Total DAX Credits': new Amount({ symbol: '', decimals: 18 }, totalDaxCredits),
         'Total UNI Credits': new Amount({ symbol: '', decimals: 18 }, totalUniCredits),
         'DAX Index': new Amount({ symbol: '×', decimals: 18 }, daxIndex),
