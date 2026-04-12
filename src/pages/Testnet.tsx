@@ -287,13 +287,25 @@ const fetchData = async () => {
         const [asset, reserveVY, reserveAsset] = r.result as unknown as [Address, bigint, bigint];
         // Find the asset symbol/decimals from our asset list
         const known = assets.find(a => a.address.toLowerCase() === asset.toLowerCase());
-        const symbol = known?.symbol ?? asset.slice(0, 10);
-        const currency = known?.currency ?? { symbol, decimals: 18 };
+        let symbol = known?.symbol;
+        let currency = known?.currency;
+        if (!known) {
+          const tokenInfo = await client.multicall({
+            contracts: [
+              { abi: abis.ERC20, address: asset, functionName: 'symbol' },
+              { abi: abis.ERC20, address: asset, functionName: 'decimals' },
+            ],
+            allowFailure: true
+          });
+          symbol = tokenInfo[0].status === 'success' ? tokenInfo[0].result as string : asset.slice(0, 10);
+          const decimals = tokenInfo[1].status === 'success' ? tokenInfo[1].result as number : 18;
+          currency = { symbol, decimals };
+        }
         daxPools.push({
           asset,
-          symbol,
+          symbol: symbol!,
           reserveVY: new Amount(VY, reserveVY),
-          reserveAsset: new Amount(currency, reserveAsset),
+          reserveAsset: new Amount(currency!, reserveAsset),
         });
       } else {
         daxErrors.push(`getPoolReserves(${i}): ${(r.error as Error).message ?? 'reverted'}`);
