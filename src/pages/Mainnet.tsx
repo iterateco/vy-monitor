@@ -503,46 +503,6 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Buyback</h2>
-        <div className="box">
-          {renderValues(data.buyback)}
-        </div>
-      </div>
-
-      <div>
-        <h2>Assets</h2>
-        {data.assets.filter(a => a.isCollateral).map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
-          <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`}>
-            <h3>
-              {symbol}
-              {notCollateral && <span className="info-badge"> (stablecoin — not collateral)</span>}
-              {errors && errors.length > 0 && (
-                <span className="error-badge">⚠ {errors.length} error{errors.length > 1 ? 's' : ''}</span>
-              )}
-              {warnings && warnings.length > 0 && !errors?.length && (
-                <span className="warning-badge">⚠ {warnings.length} warning{warnings.length > 1 ? 's' : ''}</span>
-              )}
-            </h3>
-            {errors && errors.length > 0 && (
-              <div className="error-list">
-                {errors.map((err, i) => (
-                  <div key={i} className="error-item">✗ {err}</div>
-                ))}
-              </div>
-            )}
-            {warnings && warnings.length > 0 && (
-              <div className="warning-list">
-                {warnings.map((warn, i) => (
-                  <div key={i} className="warning-item">⚠ {warn}</div>
-                ))}
-              </div>
-            )}
-            {renderValues(values)}
-          </div>
-        ))}
-      </div>
-
-      <div>
         <h2>Valinity Arbitrage Exchange</h2>
         <div className={`box ${data.dax.errors.length > 0 ? 'box--error' : ''}`}>
           {data.dax.errors.length > 0 && (
@@ -597,6 +557,46 @@ function Content({ data }: { data: MonitorData }) {
             'Net VY Staked': 'Cumulative VY deposited minus VY withdrawn through the staking router',
           })}
         </div>
+      </div>
+
+      <div>
+        <h2>Buyback</h2>
+        <div className="box">
+          {renderValues(data.buyback)}
+        </div>
+      </div>
+
+      <div>
+        <h2>Assets</h2>
+        {data.assets.filter(a => a.isCollateral).map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
+          <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`}>
+            <h3>
+              {symbol}
+              {notCollateral && <span className="info-badge"> (stablecoin — not collateral)</span>}
+              {errors && errors.length > 0 && (
+                <span className="error-badge">⚠ {errors.length} error{errors.length > 1 ? 's' : ''}</span>
+              )}
+              {warnings && warnings.length > 0 && !errors?.length && (
+                <span className="warning-badge">⚠ {warnings.length} warning{warnings.length > 1 ? 's' : ''}</span>
+              )}
+            </h3>
+            {errors && errors.length > 0 && (
+              <div className="error-list">
+                {errors.map((err, i) => (
+                  <div key={i} className="error-item">✗ {err}</div>
+                ))}
+              </div>
+            )}
+            {warnings && warnings.length > 0 && (
+              <div className="warning-list">
+                {warnings.map((warn, i) => (
+                  <div key={i} className="warning-item">⚠ {warn}</div>
+                ))}
+              </div>
+            )}
+            {renderValues(values)}
+          </div>
+        ))}
       </div>
 
       {data.hasConfigWarnings && (
