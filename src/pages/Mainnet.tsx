@@ -140,7 +140,7 @@ const fetchData = async () => {
   const overviewErrors: string[] = [];
   const overviewWarnings: string[] = [];
 
-  const pairAddress = (addresses as Record<string, Address>)['UniswapV2Pair_VY_USDC'];
+  const pairAddress = (addresses as Record<string, Address>)['VyUsdcPool'];
   const vyTokenAddress = (addresses as Record<string, Address>)['ValinityToken'];
   const pairAbi = [
     { inputs: [], name: 'getReserves', outputs: [{ name: 'reserve0', type: 'uint112' }, { name: 'reserve1', type: 'uint112' }, { name: 'blockTimestampLast', type: 'uint32' }], stateMutability: 'view', type: 'function' },
