@@ -399,7 +399,7 @@ const fetchData = async () => {
     assets: assets.map(asset => omit(asset, ['currency'])),
     dax: {
       overview: {
-        'Num Pools': Number(numPools),
+        'Num Pools': String(numPools),
         'Total VY Reserves': new Amount(VY, totalVYReserves),
         'Deposits Paused': daxDepositsPaused,
         'Withdrawals Paused': daxWithdrawalsPaused,
