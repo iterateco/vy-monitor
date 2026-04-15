@@ -148,7 +148,7 @@ const fetchData = async () => {
   ] as const;
   const pairConfig = { abi: pairAbi, address: pairAddress };
 
-  const [overviewResults, mtpResponse, stakingStatsResponse] = await Promise.all([
+  const [overviewResults, mtpResponse] = await Promise.all([
     client.multicall({
       contracts: [
         { ...vyTokenConfig, functionName: 'totalSupply' },
@@ -158,7 +158,6 @@ const fetchData = async () => {
       allowFailure: true
     }),
     fetch(`${MAINNET_API_URL}/market-data?count=1`).then(r => r.json()).catch(() => null),
-    fetch(`${MAINNET_API_URL}/staking/stats`).then(r => r.json()).catch(() => null),
   ]);
 
   const vyTotalSupply = overviewResults[0].status === 'success'
@@ -360,12 +359,6 @@ const fetchData = async () => {
   const vyInPair = routerBalanceResults[3].status === 'success' ? routerBalanceResults[3].result as bigint : (() => { vsrErrors.push('VY.balanceOf(pair): reverted'); return 0n; })();
   const vyInPools = vyInDax + vyInPair;
 
-  // Net VY Staked (from API: deposits - withdrawals)
-  const netVyStakedRaw = stakingStatsResponse?.data?.net_vy_staked;
-  const netVyStaked = netVyStakedRaw != null
-    ? new Amount(VY, BigInt(Math.round(parseFloat(netVyStakedRaw) * 1e18)))
-    : 'Unavailable' as const;
-
   // --- Buyback ---
   const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
   const buybackBalanceResult = await client.multicall({
@@ -429,7 +422,6 @@ const fetchData = async () => {
         'VDAX Balance': new Amount(VDAX, routerVDAX),
         'UNI-LP Balance': new Amount(UNI_LP, routerUniLP),
         'VY in Pools': new Amount(VY, vyInPools),
-        'Net VY Staked': netVyStaked,
       },
       errors: vsrErrors,
     },
@@ -554,7 +546,6 @@ function Content({ data }: { data: MonitorData }) {
             'VDAX Balance': 'Actual VDAX token balance held by the router contract',
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
             'VY in Pools': 'Total VY held across ValinityDAX and the USDC LP pair',
-            'Net VY Staked': 'Cumulative VY deposited minus VY withdrawn through the staking router',
           })}
         </div>
       </div>
