@@ -2,7 +2,7 @@ import flatten from 'lodash/flatten';
 import omit from 'lodash/omit';
 import startCase from 'lodash/startCase';
 import { useEffect, useState, type JSX } from 'react';
-import { createPublicClient, http, type Address } from 'viem';
+import { createPublicClient, http, parseAbiItem, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
 import { CONTRACT_ACRONYMS, MAINNET_RPC_URL, MAINNET_API_URL } from '../config';
@@ -361,15 +361,29 @@ const fetchData = async () => {
 
   // --- Buyback ---
   const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
-  const buybackBalanceResult = await client.multicall({
-    contracts: [
-      { ...vyTokenConfig, functionName: 'balanceOf', args: [buybackAddress] },
-    ],
-    allowFailure: true
-  });
+  const vytAddress = (addresses as Record<string, Address>)['ValinityYieldTreasury'];
+  const [buybackBalanceResult, buybackToVytLogs] = await Promise.all([
+    client.multicall({
+      contracts: [
+        { ...vyTokenConfig, functionName: 'balanceOf', args: [buybackAddress] },
+      ],
+      allowFailure: true
+    }),
+    client.getLogs({
+      address: vyTokenConfig.address,
+      event: parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)'),
+      args: { from: buybackAddress, to: vytAddress },
+      fromBlock: 0n,
+      toBlock: 'latest',
+    }),
+  ]);
   const buybackVyBalance = buybackBalanceResult[0].status === 'success'
     ? buybackBalanceResult[0].result as bigint
     : 0n;
+  const totalVyBoughtBack = buybackToVytLogs.reduce(
+    (sum, log) => sum + (log.args.value ?? 0n),
+    0n
+  );
   const collateralLTVFs = assets
     .filter(a => a.isCollateral && a.LTVF.value > 0n)
     .map(a => a.LTVF.value);
@@ -426,6 +440,7 @@ const fetchData = async () => {
       errors: vsrErrors,
     },
     buyback: {
+      'VY Bought Back': new Amount(VY, totalVyBoughtBack),
       'VY Holdings': new Amount(VY, buybackVyBalance),
       'Buying Power': new Amount(USD, buybackBuyingPower),
     },
@@ -484,6 +499,13 @@ function Content({ data }: { data: MonitorData }) {
         <h2>Balances</h2>
         <div className="box">
           <BalanceTable data={data.balanceMap} />
+        </div>
+      </div>
+
+      <div>
+        <h2>Buyback</h2>
+        <div className="box">
+          {renderValues(data.buyback)}
         </div>
       </div>
 
@@ -547,13 +569,6 @@ function Content({ data }: { data: MonitorData }) {
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
             'VY in Pools': 'Total VY held across ValinityDAX and the USDC LP pair',
           })}
-        </div>
-      </div>
-
-      <div>
-        <h2>Buyback</h2>
-        <div className="box">
-          {renderValues(data.buyback)}
         </div>
       </div>
 
