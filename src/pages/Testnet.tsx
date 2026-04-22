@@ -56,6 +56,7 @@ const fetchData = async () => {
       { ...vaoConfig, functionName: 'getAssetTwapPrice', args: [assetAddr] },
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetMetrics', args: [assetAddr] },
+      { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] },
     ] : [];
 
     const results = await client.multicall({
@@ -104,7 +105,7 @@ const fetchData = async () => {
       }
     }
 
-    // Collateral asset — parse remaining results (indices 2..4)
+    // Collateral asset — parse remaining results (indices 2..5)
     const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as unknown as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
@@ -114,7 +115,8 @@ const fetchData = async () => {
     const metrics = results[4].status === 'success'
       ? results[4].result as unknown as typeof defaultMetrics
       : (() => { warnings.push(`getAssetMetrics: ${(results[4].error as Error).message ?? 'reverted'}`); return defaultMetrics; })();
-    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: cap, utilized: collateralized } = metrics;
+    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: cap, utilized } = metrics;
+    const collateralized = get(5, 'getAssetCollateralized', utilized);
 
     const scaleFactor = BigInt(10) ** BigInt(18 - decimals);
 
