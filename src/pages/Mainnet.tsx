@@ -239,6 +239,16 @@ const fetchData = async () => {
     balanceMap.ValinityCapOfficer[0].value
   );
 
+  const totalCaps = assets
+    .filter(a => a.isCollateral)
+    .reduce((sum, a) => sum + (a.cap.value as bigint), 0n);
+  const capCirculatingLag = totalCaps - totalUncollateralized;
+  const absLag = capCirculatingLag >= 0n ? capCirculatingLag : -capCirculatingLag;
+  const capHealthy = absLag < 500n * 10n ** 18n;
+  if (!capHealthy) {
+    overviewErrors.push(`Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected < 500 VY)`);
+  }
+
   let tvl = 0n;
   for (const asset of assets) {
     tvl += (asset.reserveBalanceUSD.value as bigint) + (asset.totalLoanedUSD.value as bigint);
@@ -697,7 +707,10 @@ const fetchData = async () => {
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
-      'Total Uncollateralized': new Amount(VY, totalUncollateralized),
+      'Circulating': new Amount(VY, totalUncollateralized),
+      'Total Caps': new Amount(VY, totalCaps),
+      'Cap-Circ Lag': new Amount(VY, capCirculatingLag),
+      'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp
     },
