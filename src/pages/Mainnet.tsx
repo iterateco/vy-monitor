@@ -847,7 +847,7 @@ function Content({ data }: { data: MonitorData }) {
           {data.yieldOptimization.pairs.length > 0 && (
             <>
               <h3 style={{ marginTop: '12px' }}>Pairs</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
                 {data.yieldOptimization.pairs.map(pair => (
                   <PairCard key={pair.name} pair={pair} />
                 ))}
