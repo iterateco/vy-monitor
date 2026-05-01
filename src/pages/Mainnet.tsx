@@ -790,6 +790,7 @@ const fetchData = async () => {
     },
     stakingRouter: {
       overview: {
+        'VY in Pools': new Amount(VY, vyInPools),
         'Total Staked VY': new Amount(VY, totalStakedVY),
         'Total DAX Credits': new Amount({ symbol: '', decimals: 18 }, totalDaxCredits),
         'Total UNI Credits': new Amount({ symbol: '', decimals: 18 }, totalUniCredits),
@@ -801,7 +802,6 @@ const fetchData = async () => {
       tokenHoldings: {
         'VDAX Balance': new Amount(VDAX, routerVDAX),
         'UNI-LP Balance': new Amount(UNI_LP, routerUniLP),
-        'VY in Pools': new Amount(VY, vyInPools),
       },
       errors: vsrErrors,
     },
@@ -999,7 +999,6 @@ function Content({ data }: { data: MonitorData }) {
           {renderValues(data.stakingRouter.tokenHoldings, undefined, {
             'VDAX Balance': 'Actual VDAX token balance held by the router contract',
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
-            'VY in Pools': 'Total VY held across ValinityDAX and the USDC LP pair',
           })}
         </div>
       </div>
