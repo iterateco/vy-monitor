@@ -21,6 +21,9 @@ export function formatValue(value: unknown, options?: FormatValueOptions) {
     });
   } else {
     formatted = String(value);
+    if (/^0x[0-9a-fA-F]{40}$/.test(formatted)) {
+      formatted = `${formatted.slice(0, 6)}-${formatted.slice(-4)}`;
+    }
   }
 
   if (currency && options?.includeSybmol !== false) {

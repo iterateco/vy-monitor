@@ -44,6 +44,12 @@ const fetchData = async () => {
   const vlmConfig = getContractConfig('ValinityLiquidityManager');
   const npmConfig = getContractConfig('NonfungiblePositionManager', (addresses as Record<string, Address>)['UniswapV3NonfungiblePositionManager']);
 
+  const effectiveFloorResult = await client.readContract({
+    ...vcoConfig,
+    functionName: 'effectiveFloor',
+  }).catch(() => 0n);
+  const effectiveFloor = effectiveFloorResult as bigint;
+
   const assets = await Promise.all(assetEntries.map(async ([assetKey, assetAddr]) => {
     const tokenConfig = getContractConfig('ERC20', assetAddr);
     const isCollateral = COLLATERAL_SYMBOLS.has(assetKey);
@@ -103,6 +109,7 @@ const fetchData = async () => {
         totalLoaned: new Amount(currency, 0n),
         totalLoanedUSD: new Amount(USD, 0n),
         cap: new Amount(VY, 0n),
+        capFloor: new Amount(VY, 0n),
         collateralized: new Amount(VY, 0n),
         notCollateral: true
       }
@@ -138,6 +145,7 @@ const fetchData = async () => {
       totalLoaned: new Amount(currency, totalLoaned),
       totalLoanedUSD: new Amount(USD, spotPrice ? ((totalLoaned * scaleFactor) * spotPrice) / BigInt(1e18) : 0n),
       cap: new Amount(VY, cap),
+      capFloor: new Amount(VY, effectiveFloor),
       collateralized: new Amount(VY, collateralized)
     }
   }));
@@ -242,12 +250,8 @@ const fetchData = async () => {
   const totalCaps = assets
     .filter(a => a.isCollateral)
     .reduce((sum, a) => sum + (a.cap.value as bigint), 0n);
-  const capCirculatingLag = totalCaps - totalUncollateralized;
-  const absLag = capCirculatingLag >= 0n ? capCirculatingLag : -capCirculatingLag;
-  const capHealthy = absLag < 500n * 10n ** 18n;
-  if (!capHealthy) {
-    overviewErrors.push(`Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected < 500 VY)`);
-  }
+  // Cap-circulating health is recomputed below once totalDeployedVY is known (caps lowered
+  // from VCO are expected to reappear as deployed VY in VRYO/VLM).
 
   let tvl = 0n;
   for (const asset of assets) {
@@ -704,6 +708,54 @@ const fetchData = async () => {
     ? Number((totalDeployedVY * 10000n) / totalStakedVY) / 100
     : 0;
 
+  // --- Cap Health (caps + deployed VY ≈ circulating) ---
+  const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
+  const absLag = capCirculatingLag >= 0n ? capCirculatingLag : -capCirculatingLag;
+  const capHealthy = absLag < 500n * 10n ** 18n;
+  if (!capHealthy) {
+    overviewErrors.push(`Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected < 500 VY)`);
+  }
+
+  // --- Round Floor (USD per VY backing across VRT collateral + LP holdings) ---
+  // Numerator: Σ USD value of VRT collateral + Σ USD value of LP-pair holdings (incl. unclaimed fees)
+  // Denominator: Σ caps in VCO + Total VY Deployed
+  const priceFor = (addr: Address): bigint => {
+    const known = assets.find(a => a.address.toLowerCase() === addr.toLowerCase());
+    if (known?.isCollateral) return known.spotPrice.value as bigint;
+    return 10n ** 18n; // USDC / stablecoins → $1
+  };
+  const decimalsFor = (addr: Address): number => {
+    const known = assets.find(a => a.address.toLowerCase() === addr.toLowerCase());
+    return known?.currency.decimals ?? 18;
+  };
+  const toUsd1e18 = (rawAmount: bigint, decimals: number, priceUsd1e18: bigint): bigint => {
+    const scale = 10n ** BigInt(18 - decimals);
+    return (rawAmount * scale * priceUsd1e18) / 10n ** 18n;
+  };
+
+  let vrtCollateralUSD = 0n;
+  for (const a of assets) {
+    if (!a.isCollateral) continue;
+    vrtCollateralUSD += a.reserveBalanceUSD.value as bigint;
+  }
+
+  let lpHoldingsUSD = 0n;
+  for (const pd of pairData) {
+    if (!pd.cfg) continue;
+    const [, , , , token0Addr, , , , , token1Addr] = pd.cfg;
+    const yp = yieldPairs.find(y => y.configured && y.name === pd.name);
+    if (!yp || !yp.configured || !yp.hasPosition) continue;
+    const p0 = (yp.principal0.value as bigint) + (yp.unclaimedFees0.value as bigint);
+    const p1 = (yp.principal1.value as bigint) + (yp.unclaimedFees1.value as bigint);
+    lpHoldingsUSD += toUsd1e18(p0, decimalsFor(token0Addr), priceFor(token0Addr));
+    lpHoldingsUSD += toUsd1e18(p1, decimalsFor(token1Addr), priceFor(token1Addr));
+  }
+
+  const roundFloorDenominator = totalCaps + totalDeployedVY;
+  const roundFloor: Amount<bigint> | 'Unavailable' = roundFloorDenominator > 0n
+    ? new Amount(USD, ((vrtCollateralUSD + lpHoldingsUSD) * 10n ** 18n) / roundFloorDenominator)
+    : 'Unavailable' as never;
+
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
@@ -712,7 +764,8 @@ const fetchData = async () => {
       'Cap-Circ Lag': new Amount(VY, capCirculatingLag),
       'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
-      MTP: mtp
+      MTP: mtp,
+      'Round Floor': roundFloor
     },
     overviewErrors,
     overviewWarnings,
@@ -860,9 +913,11 @@ function Content({ data }: { data: MonitorData }) {
           {data.yieldOptimization.pairs.length > 0 && (
             <>
               <h3 style={{ marginTop: '12px' }}>Pairs</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px', alignItems: 'start' }}>
                 {data.yieldOptimization.pairs.map(pair => (
-                  <PairCard key={pair.name} pair={pair} />
+                  <div key={pair.name} style={{ minWidth: 0 }}>
+                    <PairCard pair={pair} />
+                  </div>
                 ))}
               </div>
             </>
@@ -888,21 +943,37 @@ function Content({ data }: { data: MonitorData }) {
             </div>
           )}
           {renderValues(data.dax.overview)}
-          {data.dax.pools.length > 0 && (
+          {data.dax.pools.length > 0 && (() => {
+            const pools = [...data.dax.pools];
+            const nvIdx = pools.findIndex(p => /nv/i.test(p.symbol));
+            const linkIdx = pools.findIndex(p => /link/i.test(p.symbol));
+            if (nvIdx !== -1 && linkIdx !== -1) {
+              [pools[nvIdx], pools[linkIdx]] = [pools[linkIdx], pools[nvIdx]];
+            }
+            return (
             <>
               <h3 style={{ marginTop: '12px' }}>Pools</h3>
-              {data.dax.pools.map((pool) => (
-                <div key={pool.symbol} className="box" style={{ marginTop: '8px' }}>
-                  <h4>{pool.symbol}</h4>
-                  {renderValues({
-                    [`${pool.symbol} Token`]: pool.asset,
-                    'VY Reserve': pool.reserveVY,
-                    [`${pool.symbol} Reserve`]: pool.reserveAsset,
-                  })}
-                </div>
-              ))}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                gap: '5px 8px',
+                alignItems: 'start',
+                marginTop: '8px',
+              }}>
+                {pools.map((pool) => (
+                  <div key={pool.symbol} className="box" style={{ marginBottom: 0 }}>
+                    <h4>{pool.symbol}</h4>
+                    {renderValues({
+                      [`${pool.symbol} Token`]: pool.asset,
+                      'VY Reserve': pool.reserveVY,
+                      [`${pool.symbol} Reserve`]: pool.reserveAsset,
+                    })}
+                  </div>
+                ))}
+              </div>
             </>
-          )}
+            );
+          })()}
         </div>
       </div>
 
@@ -1097,6 +1168,7 @@ const PairCard = ({ pair }: { pair: YieldPair }) => {
           <div style={{ marginTop: '8px' }}>
             <BandIndicator
               positionPct={pair.positionPct}
+              bandWidthPct={pair.rangeBps / 100}
               upperLabel={`upper · ${formatPrice(pair.priceUpper)}`}
               midLabel={`mid · ${formatPrice((pair.priceLower + pair.priceUpper) / 2)}`}
               lowerLabel={`lower · ${formatPrice(pair.priceLower)}`}

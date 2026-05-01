@@ -1,6 +1,13 @@
 export default [
   {
     "inputs": [],
+    "name": "effectiveFloor",
+    "outputs": [{ "internalType": "uint256", "name": "floor", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },

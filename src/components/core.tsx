@@ -13,6 +13,8 @@ export function Value({ children, ...options }: ValueProps) {
 export interface BandIndicatorProps {
   /** -100 = at lower band, 0 = mid, +100 = at upper band. May exceed range when out-of-range. */
   positionPct: number;
+  /** Configured band width in % (e.g. 10 for a ±10% band). Shown below band position. */
+  bandWidthPct?: number;
   /** Optional human-readable labels next to the gauge */
   upperLabel?: string;
   midLabel?: string;
@@ -22,6 +24,7 @@ export interface BandIndicatorProps {
 
 export function BandIndicator({
   positionPct,
+  bandWidthPct,
   upperLabel,
   midLabel,
   lowerLabel,
@@ -114,6 +117,12 @@ export function BandIndicator({
           0% = mid<br />
           ±100% = band edge
         </div>
+        {bandWidthPct !== undefined && (
+          <>
+            <div style={{ marginTop: 6 }}><strong>Band Width</strong></div>
+            <div style={{ color: '#ccc' }}>{`±${bandWidthPct.toFixed(2)}%`}</div>
+          </>
+        )}
       </div>
     </div>
   );
