@@ -4,7 +4,7 @@ import startCase from 'lodash/startCase';
 import { useEffect, useState, type JSX } from 'react';
 import { createPublicClient, http, parseAbiItem, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
-import { Value } from '../components/core';
+import { Value, BandIndicator } from '../components/core';
 import { CONTRACT_ACRONYMS, MAINNET_RPC_URL, MAINNET_API_URL } from '../config';
 import { Amount, USD, VY, VDAX, UNI_LP } from '../models';
 import type { Currency } from '../models';
@@ -40,6 +40,9 @@ const fetchData = async () => {
   const vloConfig = getContractConfig('ValinityLoanOfficer');
   const daxConfig = getContractConfig('ValinityDAX');
   const vsrConfig = getContractConfig('ValinityStakingRouter');
+  const vryoConfig = getContractConfig('ValinityReserveYieldOfficer');
+  const vlmConfig = getContractConfig('ValinityLiquidityManager');
+  const npmConfig = getContractConfig('NonfungiblePositionManager', (addresses as Record<string, Address>)['UniswapV3NonfungiblePositionManager']);
 
   const assets = await Promise.all(assetEntries.map(async ([assetKey, assetAddr]) => {
     const tokenConfig = getContractConfig('ERC20', assetAddr);
@@ -396,6 +399,301 @@ const fetchData = async () => {
     ? (buybackVyBalance * lowestLTVF) / BigInt(1e18)
     : 0n;
 
+  // --- Yield Optimization (VRYO + VLM) ---
+  const yieldErrors: string[] = [];
+  const yieldWarnings: string[] = [];
+
+  const vryoBaseResults = await client.multicall({
+    contracts: [
+      { ...vryoConfig, functionName: 'PAIR_PAXG_USDC' },
+      { ...vryoConfig, functionName: 'PAIR_WETH_WBTC' },
+      { ...vryoConfig, functionName: 'capVRYO_total' },
+      { ...vlmConfig, functionName: 'paused' },
+    ],
+    allowFailure: true
+  });
+  const yieldGet = <T,>(idx: number, label: string, fallback: T, list: string[]): T => {
+    const r = vryoBaseResults[idx];
+    if (r.status === 'success') return r.result as T;
+    list.push(`${label}: ${(r.error as Error).message ?? 'reverted'}`);
+    return fallback;
+  };
+  const pairPaxgUsdcKey = yieldGet(0, 'PAIR_PAXG_USDC', '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`, yieldErrors);
+  const pairWethWbtcKey = yieldGet(1, 'PAIR_WETH_WBTC', '0x0000000000000000000000000000000000000000000000000000000000000000' as `0x${string}`, yieldErrors);
+  const totalDeployedVY = yieldGet(2, 'capVRYO_total', 0n, yieldErrors);
+  const vlmPaused = yieldGet(3, 'paused', false, yieldErrors);
+
+  type PairKey = typeof pairPaxgUsdcKey;
+  const pairs: { name: string; key: PairKey }[] = [
+    { name: 'PAXG/USDC', key: pairPaxgUsdcKey },
+    { name: 'WETH/WBTC', key: pairWethWbtcKey },
+  ].filter(p => p.key !== '0x0000000000000000000000000000000000000000000000000000000000000000');
+
+  // Fetch VLM data (pairConfig, activeTokenId, lastRefreshAt, lastRebalanceAt) + VRYO pairPrincipal per pair
+  const vlmContracts = pairs.flatMap(p => [
+    { ...vlmConfig, functionName: 'pairConfig', args: [p.key] },
+    { ...vlmConfig, functionName: 'activeTokenId', args: [p.key] },
+    { ...vlmConfig, functionName: 'lastRefreshAt', args: [p.key] },
+    { ...vlmConfig, functionName: 'lastRebalanceAt', args: [p.key] },
+    { ...vryoConfig, functionName: 'pairPrincipal', args: [p.key] },
+  ]);
+  const vlmResults = vlmContracts.length > 0
+    ? await client.multicall({ contracts: vlmContracts, allowFailure: true })
+    : [];
+
+  type PairConfigTuple = readonly [Address, number, number, number, Address, number, number, number, number, Address, bigint, bigint, Address, boolean, number];
+  const pairData = pairs.map((p, i) => {
+    const off = i * 5;
+    const cfg = vlmResults[off]?.status === 'success'
+      ? vlmResults[off].result as unknown as PairConfigTuple
+      : null;
+    if (!cfg) yieldWarnings.push(`pairConfig(${p.name}): not configured`);
+    const tokenId = vlmResults[off + 1]?.status === 'success' ? vlmResults[off + 1].result as bigint : 0n;
+    const lastRefresh = vlmResults[off + 2]?.status === 'success' ? vlmResults[off + 2].result as bigint : 0n;
+    const lastRebalance = vlmResults[off + 3]?.status === 'success' ? vlmResults[off + 3].result as bigint : 0n;
+    const principal = vlmResults[off + 4]?.status === 'success' ? vlmResults[off + 4].result as bigint : 0n;
+    return { ...p, cfg, tokenId, lastRefresh, lastRebalance, principal };
+  });
+
+  // For each pair with a configured pool: read slot0 + active position
+  const positionContracts = pairData.flatMap(pd => {
+    if (!pd.cfg) return [];
+    const poolAddr = pd.cfg[0];
+    const c: { abi: typeof abis.UniswapV3Pool | typeof abis.NonfungiblePositionManager; address: Address; functionName: string; args?: readonly unknown[] }[] = [
+      { abi: abis.UniswapV3Pool, address: poolAddr, functionName: 'slot0' },
+    ];
+    if (pd.tokenId > 0n) {
+      c.push({ ...npmConfig, functionName: 'positions', args: [pd.tokenId] });
+    }
+    return c;
+  });
+  const positionResults = positionContracts.length > 0
+    ? await client.multicall({ contracts: positionContracts, allowFailure: true })
+    : [];
+
+  type Slot0Tuple = readonly [bigint, number, number, number, number, number, boolean];
+  type PositionTuple = readonly [bigint, Address, Address, Address, number, number, number, bigint, bigint, bigint, bigint, bigint];
+
+  // Fees: scan NPM for VLM-owned tokenIds (Transfer to=VLM), then per tokenId sum Collect-DecreaseLiquidity events
+  const vlmAddress = (addresses as Record<string, Address>)['ValinityLiquidityManager'];
+  const npmAddress = (addresses as Record<string, Address>)['UniswapV3NonfungiblePositionManager'];
+  const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)');
+  const collectEvent = parseAbiItem('event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)');
+  const decreaseEvent = parseAbiItem('event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)');
+
+  const transferLogs = await client.getLogs({
+    address: npmAddress,
+    event: transferEvent,
+    args: { to: vlmAddress },
+    fromBlock: 0n,
+    toBlock: 'latest',
+  }).catch((e: Error) => {
+    yieldWarnings.push(`Transfer scan: ${e.message}`);
+    return [] as never[];
+  });
+  const vlmTokenIds = Array.from(new Set(transferLogs.map(l => l.args.tokenId).filter((id): id is bigint => id !== undefined)));
+
+  // Per-tokenId fee aggregation
+  const feesPerTokenId = new Map<bigint, { collect0: bigint; collect1: bigint; dec0: bigint; dec1: bigint }>();
+  if (vlmTokenIds.length > 0) {
+    const [collectLogs, decreaseLogs] = await Promise.all([
+      client.getLogs({
+        address: npmAddress,
+        event: collectEvent,
+        args: { tokenId: vlmTokenIds },
+        fromBlock: 0n,
+        toBlock: 'latest',
+      }).catch(() => [] as never[]),
+      client.getLogs({
+        address: npmAddress,
+        event: decreaseEvent,
+        args: { tokenId: vlmTokenIds },
+        fromBlock: 0n,
+        toBlock: 'latest',
+      }).catch(() => [] as never[]),
+    ]);
+    for (const id of vlmTokenIds) feesPerTokenId.set(id, { collect0: 0n, collect1: 0n, dec0: 0n, dec1: 0n });
+    for (const log of collectLogs) {
+      const id = log.args.tokenId;
+      if (id === undefined) continue;
+      const e = feesPerTokenId.get(id)!;
+      e.collect0 += log.args.amount0 ?? 0n;
+      e.collect1 += log.args.amount1 ?? 0n;
+    }
+    for (const log of decreaseLogs) {
+      const id = log.args.tokenId;
+      if (id === undefined) continue;
+      const e = feesPerTokenId.get(id)!;
+      e.dec0 += log.args.amount0 ?? 0n;
+      e.dec1 += log.args.amount1 ?? 0n;
+    }
+  }
+
+  // Per-tokenId pair attribution: read positions() for every historical tokenId so we can
+  // bucket each one's (Collect - DecreaseLiquidity) into the right pair, even after rebalances.
+  // Burned NFTs revert; those fees stay unattributed (rare in practice — VLM doesn't burn).
+  const tokenIdPair = new Map<bigint, { token0: Address; token1: Address; fee: number }>();
+  if (vlmTokenIds.length > 0) {
+    const histPosResults = await client.multicall({
+      contracts: vlmTokenIds.map(id => ({ ...npmConfig, functionName: 'positions', args: [id] })),
+      allowFailure: true
+    });
+    for (let i = 0; i < vlmTokenIds.length; i++) {
+      const r = histPosResults[i];
+      if (r.status !== 'success') continue;
+      const pos = r.result as unknown as PositionTuple;
+      tokenIdPair.set(vlmTokenIds[i], { token0: pos[2], token1: pos[3], fee: pos[4] });
+    }
+  }
+
+  // Helper: V3 amounts from liquidity given current sqrtPrice and tick range
+  const TICK_BASE = 1.0001;
+  const Q96 = 2n ** 96n;
+  const tickToSqrtPriceX96 = (tick: number): bigint => {
+    // sqrt(1.0001^tick) * 2^96 — float is fine for display amounts
+    const sqrt = Math.sqrt(Math.pow(TICK_BASE, tick));
+    return BigInt(Math.floor(sqrt * Number(Q96)));
+  };
+  const getAmountsForLiquidity = (
+    sqrtP: bigint, sqrtPa: bigint, sqrtPb: bigint, liquidity: bigint
+  ): { amount0: bigint; amount1: bigint } => {
+    if (sqrtPa > sqrtPb) { const t = sqrtPa; sqrtPa = sqrtPb; sqrtPb = t; }
+    if (sqrtP <= sqrtPa) {
+      const amount0 = (liquidity * (sqrtPb - sqrtPa) * Q96) / (sqrtPb * sqrtPa);
+      return { amount0, amount1: 0n };
+    }
+    if (sqrtP >= sqrtPb) {
+      const amount1 = (liquidity * (sqrtPb - sqrtPa)) / Q96;
+      return { amount0: 0n, amount1: 0n + amount1 };
+    }
+    const amount0 = (liquidity * (sqrtPb - sqrtP) * Q96) / (sqrtPb * sqrtP);
+    const amount1 = (liquidity * (sqrtP - sqrtPa)) / Q96;
+    return { amount0, amount1 };
+  };
+
+  // Resolve per-asset Currency by address (uses already-fetched assets array; falls back to symbol-only)
+  const currencyByAddr = (addr: Address): Currency => {
+    const known = assets.find(a => a.address.toLowerCase() === addr.toLowerCase());
+    if (known) return known.currency;
+    return { symbol: addr.slice(0, 6) + '…', decimals: 18 };
+  };
+
+  // Build per-pair view models
+  let posOff = 0;
+  const yieldPairs = pairData.map(pd => {
+    if (!pd.cfg) {
+      return {
+        name: pd.name,
+        configured: false as const,
+        principal: new Amount(VY, pd.principal),
+      };
+    }
+    const [poolAddr, fee, tickSpacing, rangeBps, token0Addr, , , , , token1Addr] = pd.cfg;
+    const cur0 = currencyByAddr(token0Addr);
+    const cur1 = currencyByAddr(token1Addr);
+
+    const slot0Result = positionResults[posOff++];
+    const positionResult = pd.tokenId > 0n ? positionResults[posOff++] : null;
+
+    const slot0 = slot0Result?.status === 'success' ? slot0Result.result as unknown as Slot0Tuple : null;
+    const position = positionResult?.status === 'success' ? positionResult.result as unknown as PositionTuple : null;
+
+    if (!slot0) yieldWarnings.push(`slot0(${pd.name}): pool not initialized`);
+    if (pd.tokenId > 0n && !position) yieldWarnings.push(`positions(${pd.name} #${pd.tokenId}): unavailable`);
+
+    const currentTick = slot0 ? slot0[1] : 0;
+    const currentSqrtP = slot0 ? slot0[0] : 0n;
+    const tickLower = position ? position[5] : 0;
+    const tickUpper = position ? position[6] : 0;
+    const liquidity = position ? position[7] : 0n;
+    const tokensOwed0 = position ? position[10] : 0n;
+    const tokensOwed1 = position ? position[11] : 0n;
+
+    // Amount math
+    const sqrtPa = position ? tickToSqrtPriceX96(tickLower) : 0n;
+    const sqrtPb = position ? tickToSqrtPriceX96(tickUpper) : 0n;
+    const { amount0: principal0, amount1: principal1 } = (position && slot0)
+      ? getAmountsForLiquidity(currentSqrtP, sqrtPa, sqrtPb, liquidity)
+      : { amount0: 0n, amount1: 0n };
+
+    // Band position % (tick-space)
+    const midTick = position ? (tickLower + tickUpper) / 2 : 0;
+    const halfRange = position ? (tickUpper - tickLower) / 2 : 0;
+    const positionPct = position && halfRange > 0
+      ? ((currentTick - midTick) / halfRange) * 100
+      : 0;
+    const inRange = position ? (currentTick >= tickLower && currentTick <= tickUpper) : false;
+
+    // Price labels (token1 per token0), decimal-adjusted
+    const dec0 = cur0.decimals ?? 18;
+    const dec1 = cur1.decimals ?? 18;
+    const tickToPrice = (tick: number) => Math.pow(TICK_BASE, tick) * Math.pow(10, dec0 - dec1);
+    const priceLower = position ? tickToPrice(tickLower) : 0;
+    const priceUpper = position ? tickToPrice(tickUpper) : 0;
+    const priceCurrent = slot0 ? tickToPrice(currentTick) : 0;
+
+    // Cumulative fees for this pair: sum (Collect - DecreaseLiquidity) across ALL historical tokenIds
+    // VLM has owned for this pool (matched by token0/token1/fee), plus active position's tokensOwed.
+    // This persists across rebalances — the number is monotonic per-pair.
+    let cumFees0 = 0n;
+    let cumFees1 = 0n;
+    let attributedTokenIds = 0;
+    let unattributedTokenIds = 0;
+    for (const [tid, fees] of feesPerTokenId.entries()) {
+      const meta = tokenIdPair.get(tid);
+      if (!meta) { unattributedTokenIds++; continue; }
+      const matches =
+        meta.token0.toLowerCase() === token0Addr.toLowerCase() &&
+        meta.token1.toLowerCase() === token1Addr.toLowerCase() &&
+        meta.fee === fee;
+      if (!matches) continue;
+      attributedTokenIds++;
+      cumFees0 += fees.collect0 - fees.dec0;
+      cumFees1 += fees.collect1 - fees.dec1;
+    }
+    // Add live unclaimed (only on the active position; closed positions have tokensOwed=0)
+    cumFees0 += tokensOwed0;
+    cumFees1 += tokensOwed1;
+
+    return {
+      name: pd.name,
+      configured: true as const,
+      poolAddress: poolAddr,
+      fee,
+      tickSpacing,
+      rangeBps,
+      tokenId: pd.tokenId,
+      lastRefresh: pd.lastRefresh,
+      lastRebalance: pd.lastRebalance,
+      hasPosition: pd.tokenId > 0n && !!position,
+      tickLower,
+      tickUpper,
+      currentTick,
+      midTick,
+      positionPct,
+      inRange,
+      liquidity,
+      principal: new Amount(VY, pd.principal),
+      principal0: new Amount(cur0, principal0),
+      principal1: new Amount(cur1, principal1),
+      unclaimedFees0: new Amount(cur0, tokensOwed0),
+      unclaimedFees1: new Amount(cur1, tokensOwed1),
+      cumulativeFees0: new Amount(cur0, cumFees0),
+      cumulativeFees1: new Amount(cur1, cumFees1),
+      historicalPositions: attributedTokenIds,
+      unattributedTokenIds,
+      priceLower,
+      priceUpper,
+      priceCurrent,
+      token0: cur0,
+      token1: cur1,
+    };
+  });
+
+  const stakedVYPctDeployed = totalStakedVY > 0n
+    ? Number((totalDeployedVY * 10000n) / totalStakedVY) / 100
+    : 0;
+
   return {
     overview: {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
@@ -445,6 +743,17 @@ const fetchData = async () => {
       'VY Bought Back': new Amount(VY, totalVyBoughtBack),
       'VY Holdings': new Amount(VY, buybackVyBalance),
       'Buying Power': new Amount(USD, buybackBuyingPower),
+    },
+    yieldOptimization: {
+      overview: {
+        'Total VY Deployed': new Amount(VY, totalDeployedVY),
+        '% of Staked VY Deployed': `${stakedVYPctDeployed.toFixed(2)}%`,
+        'Active Positions': String(yieldPairs.filter(p => p.configured && p.hasPosition).length),
+        'VLM Paused': vlmPaused,
+      },
+      pairs: yieldPairs,
+      errors: yieldErrors,
+      warnings: yieldWarnings,
     },
   };
 };
@@ -508,6 +817,41 @@ function Content({ data }: { data: MonitorData }) {
         <h2>Buyback</h2>
         <div className="box">
           {renderValues(data.buyback)}
+        </div>
+      </div>
+
+      <div>
+        <h2>Yield Optimization (VRYO + VLM)</h2>
+        <div className={`box ${data.yieldOptimization.errors.length > 0 ? 'box--error' : data.yieldOptimization.warnings.length > 0 ? 'box--warning' : ''}`}>
+          {data.yieldOptimization.errors.length > 0 && (
+            <div className="error-list">
+              {data.yieldOptimization.errors.map((err, i) => (
+                <div key={i} className="error-item">✗ {err}</div>
+              ))}
+            </div>
+          )}
+          {data.yieldOptimization.warnings.length > 0 && (
+            <div className="warning-list">
+              {data.yieldOptimization.warnings.map((warn, i) => (
+                <div key={i} className="warning-item">⚠ {warn}</div>
+              ))}
+            </div>
+          )}
+          {renderValues(data.yieldOptimization.overview, undefined, {
+            'Total VY Deployed': 'VY locked across all VRYO-managed V3 LP positions (Σ pairPrincipal)',
+            '% of Staked VY Deployed': 'Share of total staked VY currently working in V3 pairs',
+            'Active Positions': 'Number of pairs with a live tokenId on the NonfungiblePositionManager',
+            'VLM Paused': 'When true, VLM cannot rebalance/refresh',
+          })}
+
+          {data.yieldOptimization.pairs.length > 0 && (
+            <>
+              <h3 style={{ marginTop: '12px' }}>Pairs</h3>
+              {data.yieldOptimization.pairs.map(pair => (
+                <PairCard key={pair.name} pair={pair} />
+              ))}
+            </>
+          )}
         </div>
       </div>
 
@@ -647,6 +991,111 @@ function renderValues(
     </table>
   );
 }
+
+type YieldPair = MonitorData['yieldOptimization']['pairs'][number];
+
+const formatPrice = (p: number) => {
+  if (!isFinite(p) || p === 0) return '—';
+  if (p >= 1000) return p.toLocaleString('en', { maximumFractionDigits: 2 });
+  if (p >= 1) return p.toFixed(4);
+  return p.toPrecision(4);
+};
+
+const formatTimestamp = (ts: bigint) => {
+  if (ts === 0n) return '—';
+  return new Date(Number(ts) * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+};
+
+const PairCard = ({ pair }: { pair: YieldPair }) => {
+  if (!pair.configured) {
+    return (
+      <div className="box box--warning" style={{ marginTop: '8px' }}>
+        <h4>{pair.name}</h4>
+        <p style={{ margin: 0, fontSize: '0.75rem', color: '#aaa' }}>
+          Pair not configured in VLM
+        </p>
+        {renderValues({ 'VY Deployed (principal)': pair.principal })}
+      </div>
+    );
+  }
+
+  const sym0 = pair.token0.symbol;
+  const sym1 = pair.token1.symbol;
+
+  const stats = {
+    'VY Deployed': pair.principal,
+    'Pool Address': pair.poolAddress,
+    'Fee Tier': `${(pair.fee / 10000).toFixed(2)}%`,
+    'Range Width': `${(pair.rangeBps / 100).toFixed(2)}% (${pair.rangeBps} bps)`,
+    'Token ID': pair.tokenId > 0n ? String(pair.tokenId) : '— (no active position)',
+    'In Range': pair.inRange ? 'Yes' : 'No',
+    'Last Refresh': formatTimestamp(pair.lastRefresh),
+    'Last Rebalance': formatTimestamp(pair.lastRebalance),
+  };
+
+  const positionStats = pair.hasPosition ? {
+    [`${sym0} in position`]: pair.principal0,
+    [`${sym1} in position`]: pair.principal1,
+    'Liquidity': pair.liquidity.toString(),
+    'Tick Range': `${pair.tickLower} → ${pair.tickUpper} (current: ${pair.currentTick})`,
+    'Price Range': `${formatPrice(pair.priceLower)} – ${formatPrice(pair.priceUpper)} ${sym1}/${sym0}`,
+    'Current Price': `${formatPrice(pair.priceCurrent)} ${sym1}/${sym0}`,
+  } : {};
+
+  const yieldStats = pair.hasPosition ? {
+    [`Cumulative Fees (${sym0})`]: pair.cumulativeFees0,
+    [`Cumulative Fees (${sym1})`]: pair.cumulativeFees1,
+    [`Unclaimed Fees (${sym0})`]: pair.unclaimedFees0,
+    [`Unclaimed Fees (${sym1})`]: pair.unclaimedFees1,
+    'Positions Counted': `${pair.historicalPositions} (lifetime, includes closed)`,
+    ...(pair.unattributedTokenIds > 0 ? { 'Unattributed (burned NFTs)': String(pair.unattributedTokenIds) } : {}),
+  } : {};
+
+  return (
+    <div className="box" style={{ marginTop: '8px', background: '#222' }}>
+      <h4>
+        {pair.name}
+        {pair.hasPosition && (
+          <span style={{
+            marginLeft: '0.5rem',
+            padding: '0.15rem 0.4rem',
+            fontSize: '0.7rem',
+            fontWeight: 'bold',
+            color: '#fff',
+            background: pair.inRange ? '#2ecc71' : '#e74c3c',
+            borderRadius: '0.25rem',
+            verticalAlign: 'middle'
+          }}>
+            {pair.inRange ? 'IN RANGE' : 'OUT OF RANGE'}
+          </span>
+        )}
+      </h4>
+
+      {renderValues(stats)}
+
+      {pair.hasPosition && (
+        <>
+          <h4 style={{ marginTop: '12px', borderBottom: '1px solid #444', paddingBottom: '4px' }}>Position</h4>
+          {renderValues(positionStats)}
+
+          <h4 style={{ marginTop: '12px', borderBottom: '1px solid #444', paddingBottom: '4px' }}>Band Indicator</h4>
+          <div style={{ marginTop: '8px' }}>
+            <BandIndicator
+              positionPct={pair.positionPct}
+              upperLabel={`upper · ${formatPrice(pair.priceUpper)}`}
+              midLabel={`mid · ${formatPrice((pair.priceLower + pair.priceUpper) / 2)}`}
+              lowerLabel={`lower · ${formatPrice(pair.priceLower)}`}
+              currentLabel={`now · ${formatPrice(pair.priceCurrent)}`}
+            />
+          </div>
+
+          <h4 style={{ marginTop: '12px', borderBottom: '1px solid #444', paddingBottom: '4px' }}>Yield</h4>
+          {renderValues(yieldStats)}
+        </>
+      )}
+    </div>
+  );
+};
 
 const BalanceTable = ({ data }: {
   data: { [key: string]: Amount<bigint>[] }
