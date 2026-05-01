@@ -28,9 +28,9 @@ export function BandIndicator({
   currentLabel,
 }: BandIndicatorProps) {
   const W = 220;
-  const H = 240;
-  const padTop = 16;
-  const padBot = 16;
+  const H = 160;
+  const padTop = 12;
+  const padBot = 12;
   const trackX = 70;
   const trackTop = padTop;
   const trackBot = H - padBot;
@@ -45,9 +45,9 @@ export function BandIndicator({
   const oor = absPct > 100;
   const color = oor ? '#e74c3c' : absPct >= 80 ? '#e74c3c' : absPct >= 50 ? '#f39c12' : '#2ecc71';
 
-  // 10% gridlines from -100..+100
+  // 20% gridlines from -100..+100
   const gridlines: { pct: number; y: number; major: boolean }[] = [];
-  for (let p = -100; p <= 100; p += 10) {
+  for (let p = -100; p <= 100; p += 20) {
     gridlines.push({ pct: p, y: midY - (p / 100) * (trackHeight / 2), major: p === 0 || Math.abs(p) === 100 });
   }
 
@@ -92,7 +92,7 @@ export function BandIndicator({
         )}
 
         {/* Current position dot */}
-        <circle cx={trackX} cy={dotY} r={7} fill={color} stroke="#fff" strokeWidth={1.5} />
+        <circle cx={trackX} cy={dotY} r={4} fill={color} stroke="#fff" strokeWidth={1} />
         {currentLabel && (
           <text x={trackX + 22} y={dotY + 4} fontSize={11} fill={color} fontWeight="bold">{currentLabel}</text>
         )}
