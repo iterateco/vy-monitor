@@ -58,7 +58,7 @@ export function BandIndicator({
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
       <svg width={W} height={H} style={{ overflow: 'visible' }}>
         {/* Track */}
-        <line x1={trackX} y1={trackTop} x2={trackX} y2={trackBot} stroke="#444" strokeWidth={2} />
+        <line x1={trackX} y1={trackTop} x2={trackX} y2={trackBot} stroke="#888" strokeWidth={2} />
 
         {/* Gridlines + labels */}
         {gridlines.map(g => (
@@ -68,7 +68,8 @@ export function BandIndicator({
               y1={g.y}
               x2={trackX + (g.major ? 14 : 6)}
               y2={g.y}
-              stroke={g.major ? '#888' : '#444'}
+              stroke="#888"
+              strokeOpacity={g.major ? 1 : 0.5}
               strokeWidth={g.major ? 2 : 1}
             />
             <text
@@ -76,7 +77,8 @@ export function BandIndicator({
               y={g.y + 3}
               textAnchor="end"
               fontSize={g.major ? 11 : 9}
-              fill={g.major ? '#ccc' : '#777'}
+              fill="currentColor"
+              fillOpacity={g.major ? 0.85 : 0.55}
             >
               {g.pct === 0 ? '0' : `${Math.abs(g.pct)}`}
             </text>
@@ -85,17 +87,17 @@ export function BandIndicator({
 
         {/* Top/bottom band labels */}
         {upperLabel && (
-          <text x={trackX + 22} y={trackTop + 4} fontSize={10} fill="#aaa">{upperLabel}</text>
+          <text x={trackX + 22} y={trackTop + 4} fontSize={10} fill="currentColor" fillOpacity={0.7}>{upperLabel}</text>
         )}
         {midLabel && (
-          <text x={trackX + 22} y={midY + 4} fontSize={10} fill="#888">{midLabel}</text>
+          <text x={trackX + 22} y={midY + 4} fontSize={10} fill="currentColor" fillOpacity={0.55}>{midLabel}</text>
         )}
         {lowerLabel && (
-          <text x={trackX + 22} y={trackBot + 4} fontSize={10} fill="#aaa">{lowerLabel}</text>
+          <text x={trackX + 22} y={trackBot + 4} fontSize={10} fill="currentColor" fillOpacity={0.7}>{lowerLabel}</text>
         )}
 
         {/* Current position dot */}
-        <circle cx={trackX} cy={dotY} r={4} fill={color} stroke="#fff" strokeWidth={1} />
+        <circle cx={trackX} cy={dotY} r={4} fill={color} stroke="currentColor" strokeOpacity={0.4} strokeWidth={1} />
         {currentLabel && (
           <text x={trackX + 22} y={dotY + 4} fontSize={11} fill={color} fontWeight="bold">{currentLabel}</text>
         )}
@@ -113,14 +115,14 @@ export function BandIndicator({
         <div style={{ color }}>
           {oor ? 'Out of range' : `${positionPct >= 0 ? '+' : ''}${positionPct.toFixed(1)}%`}
         </div>
-        <div style={{ color: '#888', marginTop: 6 }}>
+        <div style={{ opacity: 0.6, marginTop: 6 }}>
           0% = mid<br />
           ±100% = band edge
         </div>
         {bandWidthPct !== undefined && (
           <>
             <div style={{ marginTop: 6 }}><strong>Band Width</strong></div>
-            <div style={{ color: '#ccc' }}>{`±${bandWidthPct.toFixed(2)}%`}</div>
+            <div style={{ opacity: 0.8 }}>{`±${bandWidthPct.toFixed(2)}%`}</div>
           </>
         )}
       </div>

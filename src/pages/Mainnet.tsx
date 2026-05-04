@@ -167,6 +167,7 @@ const fetchData = async () => {
         { ...vyTokenConfig, functionName: 'totalSupply' },
         { ...pairConfig, functionName: 'getReserves' },
         { ...pairConfig, functionName: 'token0' },
+        { ...vyTokenConfig, functionName: 'accumulatedFees' },
       ],
       allowFailure: true
     }),
@@ -176,6 +177,9 @@ const fetchData = async () => {
   const vyTotalSupply = overviewResults[0].status === 'success'
     ? overviewResults[0].result as bigint
     : (() => { overviewErrors.push(`totalSupply: ${(overviewResults[0].error as Error).message ?? 'reverted'}`); return 0n; })();
+  const vyAccumulatedFees = overviewResults[3].status === 'success'
+    ? overviewResults[3].result as bigint
+    : (() => { overviewErrors.push(`accumulatedFees: ${(overviewResults[3].error as Error).message ?? 'reverted'}`); return 0n; })();
   const mtpPrice = mtpResponse?.data?.[0]?.market_trigger_price;
   const mtp = mtpPrice != null
     ? new Amount(USD, BigInt(Math.round(parseFloat(mtpPrice) * 1e18)))
@@ -369,6 +373,8 @@ const fetchData = async () => {
       { abi: abis.ERC20, address: pairAddress, functionName: 'balanceOf', args: [routerAddress] },
       { ...vyTokenConfig, functionName: 'balanceOf', args: [daxAddress] },
       { ...vyTokenConfig, functionName: 'balanceOf', args: [pairAddress] },
+      { abi: abis.ERC20, address: vdaxAddress, functionName: 'totalSupply' },
+      { abi: abis.ERC20, address: pairAddress, functionName: 'totalSupply' },
     ],
     allowFailure: true
   });
@@ -376,7 +382,12 @@ const fetchData = async () => {
   const routerUniLP = routerBalanceResults[1].status === 'success' ? routerBalanceResults[1].result as bigint : (() => { vsrErrors.push('UNI-LP.balanceOf(router): reverted'); return 0n; })();
   const vyInDax = routerBalanceResults[2].status === 'success' ? routerBalanceResults[2].result as bigint : (() => { vsrErrors.push('VY.balanceOf(DAX): reverted'); return 0n; })();
   const vyInPair = routerBalanceResults[3].status === 'success' ? routerBalanceResults[3].result as bigint : (() => { vsrErrors.push('VY.balanceOf(pair): reverted'); return 0n; })();
-  const vyInPools = vyInDax + vyInPair;
+  const vdaxTotalSupply = routerBalanceResults[4].status === 'success' ? routerBalanceResults[4].result as bigint : (() => { vsrErrors.push('VDAX.totalSupply: reverted'); return 0n; })();
+  const uniLpTotalSupply = routerBalanceResults[5].status === 'success' ? routerBalanceResults[5].result as bigint : (() => { vsrErrors.push('UNI-LP.totalSupply: reverted'); return 0n; })();
+  // Pro-rata share of VY in each pool that belongs to the staking router
+  const routerVYInDax = vdaxTotalSupply > 0n ? (vyInDax * routerVDAX) / vdaxTotalSupply : 0n;
+  const routerVYInPair = uniLpTotalSupply > 0n ? (vyInPair * routerUniLP) / uniLpTotalSupply : 0n;
+  const vyInPools = routerVYInDax + routerVYInPair;
 
   // --- Buyback ---
   const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
@@ -704,16 +715,22 @@ const fetchData = async () => {
     };
   });
 
-  const stakedVYPctDeployed = totalStakedVY > 0n
-    ? Number((totalDeployedVY * 10000n) / totalStakedVY) / 100
+  const stakedVYPctDeployed = vyInPools > 0n
+    ? Number((totalDeployedVY * 10000n) / vyInPools) / 100
     : 0;
 
   // --- Cap Health (caps + deployed VY ≈ circulating) ---
+  // The lag exists because the VY token batches collected fees and only flushes
+  // them to the VCO every `transfersPerProcess` transfers. Until the next flush,
+  // those fees sit in the token contract as `accumulatedFees`. So the lag must
+  // exactly equal the token's accumulated-fees balance.
   const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
-  const absLag = capCirculatingLag >= 0n ? capCirculatingLag : -capCirculatingLag;
-  const capHealthy = absLag < 500n * 10n ** 18n;
+  const capHealthy = capCirculatingLag === vyAccumulatedFees;
   if (!capHealthy) {
-    overviewErrors.push(`Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected < 500 VY)`);
+    overviewErrors.push(
+      `Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY, ` +
+      `VY token accumulatedFees = ${(Number(vyAccumulatedFees) / 1e18).toFixed(2)} VY (expected exact match)`
+    );
   }
 
   // --- Round Floor (USD per VY backing across VRT collateral + LP holdings) ---
@@ -762,7 +779,8 @@ const fetchData = async () => {
       'Circulating': new Amount(VY, totalUncollateralized),
       'Total Caps': new Amount(VY, totalCaps),
       'Cap-Circ Lag': new Amount(VY, capCirculatingLag),
-      'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
+      'VY Token Accumulated Fees': new Amount(VY, vyAccumulatedFees),
+      'Matches VY Token Fee Lag': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp,
       'Round Floor': roundFloor
@@ -887,45 +905,6 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Yield Optimization (VRYO + VLM)</h2>
-        <div className={`box ${data.yieldOptimization.errors.length > 0 ? 'box--error' : data.yieldOptimization.warnings.length > 0 ? 'box--warning' : ''}`}>
-          {data.yieldOptimization.errors.length > 0 && (
-            <div className="error-list">
-              {data.yieldOptimization.errors.map((err, i) => (
-                <div key={i} className="error-item">✗ {err}</div>
-              ))}
-            </div>
-          )}
-          {data.yieldOptimization.warnings.length > 0 && (
-            <div className="warning-list">
-              {data.yieldOptimization.warnings.map((warn, i) => (
-                <div key={i} className="warning-item">⚠ {warn}</div>
-              ))}
-            </div>
-          )}
-          {renderValues(data.yieldOptimization.overview, undefined, {
-            'Total VY Deployed': 'VY locked across all VRYO-managed V3 LP positions (Σ pairPrincipal)',
-            '% of Staked VY Deployed': 'Share of total staked VY currently working in V3 pairs',
-            'Active Positions': 'Number of pairs with a live tokenId on the NonfungiblePositionManager',
-            'VLM Paused': 'When true, VLM cannot rebalance/refresh',
-          })}
-
-          {data.yieldOptimization.pairs.length > 0 && (
-            <>
-              <h3 style={{ marginTop: '12px' }}>Pairs</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px', alignItems: 'start' }}>
-                {data.yieldOptimization.pairs.map(pair => (
-                  <div key={pair.name} style={{ minWidth: 0 }}>
-                    <PairCard pair={pair} />
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      <div>
         <h2>Pool (VY/USDC)</h2>
         <div className="box">
           {renderValues(data.pool)}
@@ -1000,6 +979,45 @@ function Content({ data }: { data: MonitorData }) {
             'VDAX Balance': 'Actual VDAX token balance held by the router contract',
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
           })}
+        </div>
+      </div>
+
+      <div>
+        <h2>Yield Optimization (VRYO + VLM)</h2>
+        <div className={`box ${data.yieldOptimization.errors.length > 0 ? 'box--error' : data.yieldOptimization.warnings.length > 0 ? 'box--warning' : ''}`}>
+          {data.yieldOptimization.errors.length > 0 && (
+            <div className="error-list">
+              {data.yieldOptimization.errors.map((err, i) => (
+                <div key={i} className="error-item">✗ {err}</div>
+              ))}
+            </div>
+          )}
+          {data.yieldOptimization.warnings.length > 0 && (
+            <div className="warning-list">
+              {data.yieldOptimization.warnings.map((warn, i) => (
+                <div key={i} className="warning-item">⚠ {warn}</div>
+              ))}
+            </div>
+          )}
+          {renderValues(data.yieldOptimization.overview, undefined, {
+            'Total VY Deployed': 'VY locked across all VRYO-managed V3 LP positions (Σ pairPrincipal)',
+            '% of Staked VY Deployed': 'Share of total staked VY currently working in V3 pairs',
+            'Active Positions': 'Number of pairs with a live tokenId on the NonfungiblePositionManager',
+            'VLM Paused': 'When true, VLM cannot rebalance/refresh',
+          })}
+
+          {data.yieldOptimization.pairs.length > 0 && (
+            <>
+              <h3 style={{ marginTop: '12px' }}>Pairs</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '8px', alignItems: 'start' }}>
+                {data.yieldOptimization.pairs.map(pair => (
+                  <div key={pair.name} style={{ minWidth: 0 }}>
+                    <PairCard pair={pair} />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -1137,7 +1155,7 @@ const PairCard = ({ pair }: { pair: YieldPair }) => {
   } : {};
 
   return (
-    <div className="box" style={{ marginTop: '8px', background: '#222' }}>
+    <div className="box" style={{ marginTop: '8px' }}>
       <h4>
         {pair.name}
         {pair.hasPosition && (
