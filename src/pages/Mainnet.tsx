@@ -923,11 +923,13 @@ function Content({ data }: { data: MonitorData }) {
           {renderValues(data.dax.overview)}
           {data.dax.pools.length > 0 && (() => {
             const pools = [...data.dax.pools];
-            const nvIdx = pools.findIndex(p => /nv/i.test(p.symbol));
-            const linkIdx = pools.findIndex(p => /link/i.test(p.symbol));
-            if (nvIdx !== -1 && linkIdx !== -1) {
-              [pools[nvIdx], pools[linkIdx]] = [pools[linkIdx], pools[nvIdx]];
-            }
+            const swap = (a: RegExp, b: RegExp) => {
+              const ai = pools.findIndex(p => a.test(p.symbol));
+              const bi = pools.findIndex(p => b.test(p.symbol));
+              if (ai !== -1 && bi !== -1) [pools[ai], pools[bi]] = [pools[bi], pools[ai]];
+            };
+            swap(/nv/i, /wbtc/i);
+            swap(/tsla/i, /weth/i);
             return (
             <>
               <h3 style={{ marginTop: '12px' }}>Pools</h3>
