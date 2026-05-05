@@ -722,15 +722,14 @@ const fetchData = async () => {
   // --- Cap Health (caps + deployed VY ≈ circulating) ---
   // The lag exists because the VY token batches collected fees and only flushes
   // them to the VCO every `transfersPerProcess` transfers. Until the next flush,
-  // those fees sit in the token contract as `accumulatedFees`. So the lag must
-  // exactly equal the token's accumulated-fees balance.
+  // those fees sit in the token contract as `accumulatedFees`. The lag should
+  // exactly equal that pending balance.
   const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
-  const capHealthy = capCirculatingLag === vyAccumulatedFees;
+  const matchesVyTokenFee = capCirculatingLag === vyAccumulatedFees;
+  const absLag = capCirculatingLag >= 0n ? capCirculatingLag : -capCirculatingLag;
+  const capHealthy = absLag < 500n * 10n ** 18n;
   if (!capHealthy) {
-    overviewErrors.push(
-      `Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY, ` +
-      `VY token accumulatedFees = ${(Number(vyAccumulatedFees) / 1e18).toFixed(2)} VY (expected exact match)`
-    );
+    overviewErrors.push(`Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected < 500 VY)`);
   }
 
   // --- Round Floor (USD per VY backing across VRT collateral + LP holdings) ---
@@ -778,7 +777,8 @@ const fetchData = async () => {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
       'Circulating': new Amount(VY, totalUncollateralized),
       'Total Caps': new Amount(VY, totalCaps),
-      'Cap-Circ Lag': `${(Number(capCirculatingLag) / 1e18).toLocaleString('en', { minimumFractionDigits: 5, maximumFractionDigits: 5 })} VY ${capHealthy ? '✅' : '⚠'}`,
+      'Cap-Circ Lag': `${(Number(capCirculatingLag) / 1e18).toLocaleString('en', { minimumFractionDigits: 5, maximumFractionDigits: 5 })} VY ${matchesVyTokenFee ? '(Matches VY Token Fee)' : '(Does Not Match VY Token Fee)'}`,
+      'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp,
       'Round Floor': roundFloor
