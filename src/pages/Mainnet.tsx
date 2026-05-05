@@ -928,6 +928,7 @@ function Content({ data }: { data: MonitorData }) {
               const bi = pools.findIndex(p => b.test(p.symbol));
               if (ai !== -1 && bi !== -1) [pools[ai], pools[bi]] = [pools[bi], pools[ai]];
             };
+            swap(/nv/i, /link/i);
             swap(/nv/i, /wbtc/i);
             swap(/tsla/i, /weth/i);
             return (
