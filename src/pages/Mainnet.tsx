@@ -722,14 +722,15 @@ const fetchData = async () => {
   // --- Cap Health (caps + deployed VY ≈ circulating) ---
   // The lag exists because the VY token batches collected fees and only flushes
   // them to the VCO every `transfersPerProcess` transfers. Until the next flush,
-  // those fees sit in the token contract as `accumulatedFees`. The lag should
-  // exactly equal that pending balance.
+  // those fees sit in the token contract as `accumulatedFees`. The lag must
+  // exactly equal that pending balance — any drift is a real issue.
   const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
-  const matchesVyTokenFee = capCirculatingLag === vyAccumulatedFees;
-  const absLag = capCirculatingLag >= 0n ? capCirculatingLag : -capCirculatingLag;
-  const capHealthy = absLag < 500n * 10n ** 18n;
+  const capHealthy = capCirculatingLag === vyAccumulatedFees;
   if (!capHealthy) {
-    overviewErrors.push(`Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected < 500 VY)`);
+    overviewErrors.push(
+      `Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY, ` +
+      `VY token accumulatedFees = ${(Number(vyAccumulatedFees) / 1e18).toFixed(2)} VY (expected exact match)`
+    );
   }
 
   // --- Round Floor (USD per VY backing across VRT collateral + LP holdings) ---
@@ -777,7 +778,7 @@ const fetchData = async () => {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
       'Circulating': new Amount(VY, totalUncollateralized),
       'Total Caps': new Amount(VY, totalCaps),
-      'Cap-Circ Lag': `${(Number(capCirculatingLag) / 1e18).toLocaleString('en', { minimumFractionDigits: 5, maximumFractionDigits: 5 })} VY ${matchesVyTokenFee ? '(Matches VY Token Fee)' : '(Does Not Match VY Token Fee)'}`,
+      'Lagged VY Token Fee': new Amount(VY, capCirculatingLag),
       'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp,
