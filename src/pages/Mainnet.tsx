@@ -778,7 +778,7 @@ const fetchData = async () => {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
       'Circulating': new Amount(VY, totalUncollateralized),
       'Total Caps': new Amount(VY, totalCaps),
-      'Lagged VY Token Fee': new Amount(VY, capCirculatingLag),
+      'Lagged VY Token Fee': new Amount(VY, vyAccumulatedFees),
       'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp,
