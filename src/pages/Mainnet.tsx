@@ -778,9 +778,7 @@ const fetchData = async () => {
       'VY Total Supply': new Amount(VY, vyTotalSupply),
       'Circulating': new Amount(VY, totalUncollateralized),
       'Total Caps': new Amount(VY, totalCaps),
-      'Cap-Circ Lag': new Amount(VY, capCirculatingLag),
-      'VY Token Accumulated Fees': new Amount(VY, vyAccumulatedFees),
-      'Matches VY Token Fee Lag': capHealthy ? '✅ OK' : '⚠ Mismatch',
+      'Cap-Circ Lag': `${(Number(capCirculatingLag) / 1e18).toLocaleString('en', { minimumFractionDigits: 5, maximumFractionDigits: 5 })} VY ${capHealthy ? '✅' : '⚠'}`,
       TVL: new Amount(USD, tvl),
       MTP: mtp,
       'Round Floor': roundFloor
