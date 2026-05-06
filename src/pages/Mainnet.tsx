@@ -466,7 +466,7 @@ const fetchData = async () => {
     ? await client.multicall({ contracts: vlmContracts, allowFailure: true })
     : [];
 
-  type PairConfigTuple = readonly [Address, number, number, number, Address, number, number, number, number, Address, bigint, bigint, Address, boolean, number];
+  type PairConfigTuple = readonly [Address, number, number, number, number, Address, number, number, number, number, Address, bigint, bigint, Address, boolean, number];
   const pairData = pairs.map((p, i) => {
     const off = i * 5;
     const cfg = vlmResults[off]?.status === 'success'
@@ -613,7 +613,8 @@ const fetchData = async () => {
         principal: new Amount(VY, pd.principal),
       };
     }
-    const [poolAddr, fee, tickSpacing, rangeBps, token0Addr, , , , , token1Addr] = pd.cfg;
+    const [poolAddr, fee, tickSpacing, lowerRangeBps, upperRangeBps, token0Addr, , , , , token1Addr] = pd.cfg;
+    const rangeBps = (lowerRangeBps + upperRangeBps) / 2;
     const cur0 = currencyByAddr(token0Addr);
     const cur1 = currencyByAddr(token1Addr);
 
@@ -759,7 +760,7 @@ const fetchData = async () => {
   let lpHoldingsUSD = 0n;
   for (const pd of pairData) {
     if (!pd.cfg) continue;
-    const [, , , , token0Addr, , , , , token1Addr] = pd.cfg;
+    const [, , , , , token0Addr, , , , , token1Addr] = pd.cfg;
     const yp = yieldPairs.find(y => y.configured && y.name === pd.name);
     if (!yp || !yp.configured || !yp.hasPosition) continue;
     const p0 = (yp.principal0.value as bigint) + (yp.unclaimedFees0.value as bigint);
