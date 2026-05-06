@@ -24,7 +24,7 @@ const client = createPublicClient({
 
 const fetchData = async () => {
   const networkName = 'mainnet';
-  const { abis, addresses, assets: assetAddresses } = networks[networkName];
+  const { abis, addresses, addressesPrevious, assets: assetAddresses } = networks[networkName];
   const assetEntries = Object.entries(assetAddresses) as [string, Address][];
 
   const getContractConfig = <T extends keyof typeof abis>(name: T, address?: Address) => {
@@ -501,6 +501,8 @@ const fetchData = async () => {
 
   // Fees: scan NPM for VLM-owned tokenIds (Transfer to=VLM), then per tokenId sum Collect-DecreaseLiquidity events
   const vlmAddress = (addresses as Record<string, Address>)['ValinityLiquidityManager'];
+  const vlmPrevious = (addressesPrevious?.ValinityLiquidityManager ?? []) as Address[];
+  const vlmAddressesAll = [vlmAddress, ...vlmPrevious];
   const npmAddress = (addresses as Record<string, Address>)['UniswapV3NonfungiblePositionManager'];
   const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)');
   const collectEvent = parseAbiItem('event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)');
@@ -509,7 +511,7 @@ const fetchData = async () => {
   const transferLogs = await client.getLogs({
     address: npmAddress,
     event: transferEvent,
-    args: { to: vlmAddress },
+    args: { to: vlmAddressesAll },
     fromBlock: 0n,
     toBlock: 'latest',
   }).catch((e: Error) => {

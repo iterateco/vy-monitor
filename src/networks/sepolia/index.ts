@@ -13,5 +13,6 @@ export default {
     ValinityLoanOfficer
   },
   addresses,
+  addressesPrevious: {} as Record<string, string[]>,
   assets
 } as const;

@@ -1,5 +1,6 @@
 import common from '../common';
 import addresses from './addresses.json';
+import addressesPrevious from './addressesPrevious.json';
 import assets from './assets.json';
 import ValinityAcquisitionOfficer from './ValinityAcquisitionOfficer';
 import ValinityCapOfficer from './ValinityCapOfficer';
@@ -20,5 +21,6 @@ export default {
     UniswapV3Pool
   },
   addresses,
+  addressesPrevious,
   assets
 } as const;
