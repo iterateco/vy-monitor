@@ -508,17 +508,23 @@ const fetchData = async () => {
   const collectEvent = parseAbiItem('event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)');
   const decreaseEvent = parseAbiItem('event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)');
 
-  const transferLogs = await client.getLogs({
-    address: npmAddress,
-    event: transferEvent,
-    args: { to: vlmAddressesAll },
-    fromBlock: 0n,
-    toBlock: 'latest',
-  }).catch((e: Error) => {
-    yieldWarnings.push(`Transfer scan: ${e.message}`);
-    return [] as never[];
-  });
+  const transferLogsByAddr = await Promise.all(
+    vlmAddressesAll.map(addr =>
+      client.getLogs({
+        address: npmAddress,
+        event: transferEvent,
+        args: { to: addr },
+        fromBlock: 0n,
+        toBlock: 'latest',
+      }).catch((e: Error) => {
+        yieldWarnings.push(`Transfer scan (${addr.slice(0, 8)}…): ${e.message}`);
+        return [] as never[];
+      })
+    )
+  );
+  const transferLogs = transferLogsByAddr.flat();
   const vlmTokenIds = Array.from(new Set(transferLogs.map(l => l.args.tokenId).filter((id): id is bigint => id !== undefined)));
+  yieldWarnings.push(`VLM tokenIds found: ${vlmTokenIds.length} (current=${vlmAddress.slice(0,8)}…, prev=${vlmPrevious.length})`);
 
   // Per-tokenId fee aggregation
   const feesPerTokenId = new Map<bigint, { collect0: bigint; collect1: bigint; dec0: bigint; dec1: bigint }>();
@@ -670,14 +676,20 @@ const fetchData = async () => {
     for (const [tid, fees] of feesPerTokenId.entries()) {
       const meta = tokenIdPair.get(tid);
       if (!meta) { unattributedTokenIds++; continue; }
-      const matches =
-        meta.token0.toLowerCase() === token0Addr.toLowerCase() &&
-        meta.token1.toLowerCase() === token1Addr.toLowerCase() &&
-        meta.fee === fee;
+      const t0 = token0Addr.toLowerCase();
+      const t1 = token1Addr.toLowerCase();
+      const m0 = meta.token0.toLowerCase();
+      const m1 = meta.token1.toLowerCase();
+      const sameFee = meta.fee === fee;
+      const sameTokens = (m0 === t0 && m1 === t1) || (m0 === t1 && m1 === t0);
+      const matches = sameFee && sameTokens;
       if (!matches) continue;
       attributedTokenIds++;
-      cumFees0 += fees.collect0 - fees.dec0;
-      cumFees1 += fees.collect1 - fees.dec1;
+      const flipped = m0 !== t0;
+      const add0 = flipped ? fees.collect1 - fees.dec1 : fees.collect0 - fees.dec0;
+      const add1 = flipped ? fees.collect0 - fees.dec0 : fees.collect1 - fees.dec1;
+      cumFees0 += add0;
+      cumFees1 += add1;
     }
     // Add live unclaimed (only on the active position; closed positions have tokensOwed=0)
     cumFees0 += tokensOwed0;
