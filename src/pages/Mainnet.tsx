@@ -24,7 +24,7 @@ const client = createPublicClient({
 
 const fetchData = async () => {
   const networkName = 'mainnet';
-  const { abis, addresses, addressesPrevious, assets: assetAddresses } = networks[networkName];
+  const { abis, addresses, assets: assetAddresses } = networks[networkName];
   const assetEntries = Object.entries(assetAddresses) as [string, Address][];
 
   const getContractConfig = <T extends keyof typeof abis>(name: T, address?: Address) => {
@@ -500,31 +500,23 @@ const fetchData = async () => {
   type PositionTuple = readonly [bigint, Address, Address, Address, number, number, number, bigint, bigint, bigint, bigint, bigint];
 
   // Fees: scan NPM for VLM-owned tokenIds (Transfer to=VLM), then per tokenId sum Collect-DecreaseLiquidity events
-  const vlmAddress = (addresses as Record<string, Address>)['ValinityLiquidityManager'];
-  const vlmPrevious = (addressesPrevious?.ValinityLiquidityManager ?? []) as Address[];
-  const vlmAddressesAll = [vlmAddress, ...vlmPrevious];
+  const vrtAddress = (addresses as Record<string, Address>)['ValinityReserveTreasury'];
   const npmAddress = (addresses as Record<string, Address>)['UniswapV3NonfungiblePositionManager'];
   const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)');
   const collectEvent = parseAbiItem('event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)');
   const decreaseEvent = parseAbiItem('event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)');
 
-  const transferLogsByAddr = await Promise.all(
-    vlmAddressesAll.map(addr =>
-      client.getLogs({
-        address: npmAddress,
-        event: transferEvent,
-        args: { to: addr },
-        fromBlock: 0n,
-        toBlock: 'latest',
-      }).catch((e: Error) => {
-        yieldWarnings.push(`Transfer scan (${addr.slice(0, 8)}…): ${e.message}`);
-        return [] as never[];
-      })
-    )
-  );
-  const transferLogs = transferLogsByAddr.flat();
+  const transferLogs = await client.getLogs({
+    address: npmAddress,
+    event: transferEvent,
+    args: { to: vrtAddress },
+    fromBlock: 0n,
+    toBlock: 'latest',
+  }).catch((e: Error) => {
+    yieldWarnings.push(`Transfer scan: ${e.message}`);
+    return [] as never[];
+  });
   const vlmTokenIds = Array.from(new Set(transferLogs.map(l => l.args.tokenId).filter((id): id is bigint => id !== undefined)));
-  yieldWarnings.push(`VLM tokenIds found: ${vlmTokenIds.length} (current=${vlmAddress.slice(0,8)}…, prev=${vlmPrevious.length})`);
 
   // Per-tokenId fee aggregation
   const feesPerTokenId = new Map<bigint, { collect0: bigint; collect1: bigint; dec0: bigint; dec1: bigint }>();
@@ -564,7 +556,8 @@ const fetchData = async () => {
 
   // Per-tokenId pair attribution: read positions() for every historical tokenId so we can
   // bucket each one's (Collect - DecreaseLiquidity) into the right pair, even after rebalances.
-  // Burned NFTs revert; those fees stay unattributed (rare in practice — VLM doesn't burn).
+  // Burned NFTs revert positions(); for those we fall back to scanning each VLM's
+  // PositionMinted(pairKey indexed, tokenId indexed) event to recover the pairKey directly.
   const tokenIdPair = new Map<bigint, { token0: Address; token1: Address; fee: number }>();
   if (vlmTokenIds.length > 0) {
     const histPosResults = await client.multicall({
@@ -578,6 +571,30 @@ const fetchData = async () => {
       tokenIdPair.set(vlmTokenIds[i], { token0: pos[2], token1: pos[3], fee: pos[4] });
     }
   }
+
+  // Fallback attribution by pairKey for burned NFTs (positions() reverts post-burn).
+  const tokenIdToPairKey = new Map<bigint, `0x${string}`>();
+  const vlmAddresses: Address[] = [
+    (addresses as Record<string, Address>)['ValinityLiquidityManager'],
+    '0xfd2D528afAA5e7D58811ae859080E5e974Aa7392',
+  ];
+  const positionMintedEvent = parseAbiItem('event PositionMinted(bytes32 indexed pairKey, uint256 indexed tokenId, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 amount0, uint256 amount1)');
+  await Promise.all(vlmAddresses.map(addr =>
+    client.getLogs({
+      address: addr,
+      event: positionMintedEvent,
+      fromBlock: 0n,
+      toBlock: 'latest',
+    }).then(logs => {
+      for (const log of logs) {
+        const tid = log.args.tokenId;
+        const pk = log.args.pairKey;
+        if (tid !== undefined && pk !== undefined) tokenIdToPairKey.set(tid, pk);
+      }
+    }).catch((e: Error) => {
+      yieldWarnings.push(`PositionMinted scan (${addr.slice(0, 8)}…): ${e.message}`);
+    })
+  ));
 
   // Helper: V3 amounts from liquidity given current sqrtPrice and tick range
   const TICK_BASE = 1.0001;
@@ -675,17 +692,31 @@ const fetchData = async () => {
     let unattributedTokenIds = 0;
     for (const [tid, fees] of feesPerTokenId.entries()) {
       const meta = tokenIdPair.get(tid);
-      if (!meta) { unattributedTokenIds++; continue; }
-      const t0 = token0Addr.toLowerCase();
-      const t1 = token1Addr.toLowerCase();
-      const m0 = meta.token0.toLowerCase();
-      const m1 = meta.token1.toLowerCase();
-      const sameFee = meta.fee === fee;
-      const sameTokens = (m0 === t0 && m1 === t1) || (m0 === t1 && m1 === t0);
-      const matches = sameFee && sameTokens;
-      if (!matches) continue;
+      let flipped = false;
+      let matched = false;
+      if (meta) {
+        const t0 = token0Addr.toLowerCase();
+        const t1 = token1Addr.toLowerCase();
+        const m0 = meta.token0.toLowerCase();
+        const m1 = meta.token1.toLowerCase();
+        const sameFee = meta.fee === fee;
+        const sameTokens = (m0 === t0 && m1 === t1) || (m0 === t1 && m1 === t0);
+        if (sameFee && sameTokens) {
+          matched = true;
+          flipped = m0 !== t0;
+        }
+      } else {
+        const pk = tokenIdToPairKey.get(tid);
+        if (pk && pk.toLowerCase() === pd.key.toLowerCase()) {
+          matched = true;
+          flipped = BigInt(token0Addr) > BigInt(token1Addr);
+        }
+      }
+      if (!matched) {
+        if (!meta && !tokenIdToPairKey.has(tid)) unattributedTokenIds++;
+        continue;
+      }
       attributedTokenIds++;
-      const flipped = m0 !== t0;
       const add0 = flipped ? fees.collect1 - fees.dec1 : fees.collect0 - fees.dec0;
       const add1 = flipped ? fees.collect0 - fees.dec0 : fees.collect1 - fees.dec1;
       cumFees0 += add0;
