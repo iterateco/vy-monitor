@@ -579,7 +579,8 @@ const fetchData = async () => {
     '0xfd2D528afAA5e7D58811ae859080E5e974Aa7392',
   ];
   const positionMintedEvent = parseAbiItem('event PositionMinted(bytes32 indexed pairKey, uint256 indexed tokenId, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 amount0, uint256 amount1)');
-  await Promise.all(vlmAddresses.map(addr =>
+  const positionRebalancedEvent = parseAbiItem('event PositionRebalanced(bytes32 indexed pairKey, uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper, uint128 newLiquidity)');
+  await Promise.all(vlmAddresses.flatMap(addr => [
     client.getLogs({
       address: addr,
       event: positionMintedEvent,
@@ -593,8 +594,22 @@ const fetchData = async () => {
       }
     }).catch((e: Error) => {
       yieldWarnings.push(`PositionMinted scan (${addr.slice(0, 8)}…): ${e.message}`);
-    })
-  ));
+    }),
+    client.getLogs({
+      address: addr,
+      event: positionRebalancedEvent,
+      fromBlock: 0n,
+      toBlock: 'latest',
+    }).then(logs => {
+      for (const log of logs) {
+        const tid = log.args.newTokenId;
+        const pk = log.args.pairKey;
+        if (tid !== undefined && pk !== undefined) tokenIdToPairKey.set(tid, pk);
+      }
+    }).catch((e: Error) => {
+      yieldWarnings.push(`PositionRebalanced scan (${addr.slice(0, 8)}…): ${e.message}`);
+    }),
+  ]));
 
   // Helper: V3 amounts from liquidity given current sqrtPrice and tick range
   const TICK_BASE = 1.0001;
@@ -761,9 +776,27 @@ const fetchData = async () => {
     };
   });
 
-  const stakedVYPctDeployed = vyInPools > 0n
-    ? Number((totalDeployedVY * 10000n) / vyInPools) / 100
+  // VRYO now sizes deployed capital as ~85% of circulating VY, leaving a 15%
+  // cushion: 5% earmarked for VLO loans + 10% headroom for VBBO buybacks.
+  // capVRYO_total only refreshes when a staker/loaner interacts with VRYO, so
+  // between calls the undeployed % drifts as VBBO eats into circulating supply.
+  // If the cushion shrinks past 10% (orange) or 7% (red), trigger an update
+  // before VBBO encroaches on the VLO loan budget.
+  const circulatingPctDeployed = totalUncollateralized > 0n
+    ? Number((totalDeployedVY * 10000n) / totalUncollateralized) / 100
     : 0;
+  const undeployedCushionPct = Math.max(0, 100 - circulatingPctDeployed);
+  if (totalUncollateralized > 0n) {
+    if (undeployedCushionPct <= 7) {
+      yieldWarnings.push(
+        `Cushion at ${undeployedCushionPct.toFixed(2)}% — RED: at/under 7%, VBBO is about to eat the VLO loan budget. Refresh VRYO now.`
+      );
+    } else if (undeployedCushionPct <= 10) {
+      yieldWarnings.push(
+        `Cushion at ${undeployedCushionPct.toFixed(2)}% — ORANGE: only 10% of circulating left undeployed. Plan a VRYO refresh.`
+      );
+    }
+  }
 
   // --- Cap Health (caps + deployed VY ≈ circulating) ---
   // The lag exists because the VY token batches collected fees and only flushes
@@ -828,7 +861,10 @@ const fetchData = async () => {
       'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp,
-      'Round Floor': roundFloor
+      'Round Floor': roundFloor,
+      'VRYO Cushion': totalUncollateralized > 0n
+        ? `${undeployedCushionPct.toFixed(2)}% ${undeployedCushionPct <= 7 ? '🔴' : undeployedCushionPct <= 10 ? '🟠' : '🟢'}`
+        : 'Unavailable' as const,
     },
     overviewErrors,
     overviewWarnings,
@@ -876,7 +912,8 @@ const fetchData = async () => {
     yieldOptimization: {
       overview: {
         'Total VY Deployed': new Amount(VY, totalDeployedVY),
-        '% of Staked VY Deployed': `${stakedVYPctDeployed.toFixed(2)}%`,
+        '% of Circulating Supply Deployed': `${circulatingPctDeployed.toFixed(2)}%`,
+        'Undeployed Cushion': `${undeployedCushionPct.toFixed(2)}%`,
         'Active Positions': String(yieldPairs.filter(p => p.configured && p.hasPosition).length),
         'VLM Paused': vlmPaused,
       },
@@ -1049,7 +1086,8 @@ function Content({ data }: { data: MonitorData }) {
           )}
           {renderValues(data.yieldOptimization.overview, undefined, {
             'Total VY Deployed': 'VY locked across all VRYO-managed V3 LP positions (Σ pairPrincipal)',
-            '% of Staked VY Deployed': 'Share of total staked VY currently working in V3 pairs',
+            '% of Circulating Supply Deployed': 'capVRYO_total ÷ circulating VY. VRYO targets ~85% of circulating; refreshed on each staker/loaner call.',
+            'Undeployed Cushion': '100% − deployed%. The 15% cushion absorbs VBBO buybacks (≤10%) and VLO loans (≤5%). Orange ≤ 10%, Red ≤ 7% — trigger a VRYO refresh before VBBO eats into the loan budget.',
             'Active Positions': 'Number of pairs with a live tokenId on the NonfungiblePositionManager',
             'VLM Paused': 'When true, VLM cannot rebalance/refresh',
           })}
