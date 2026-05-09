@@ -499,26 +499,86 @@ const fetchData = async () => {
   type Slot0Tuple = readonly [bigint, number, number, number, number, number, boolean];
   type PositionTuple = readonly [bigint, Address, Address, Address, number, number, number, bigint, bigint, bigint, bigint, bigint];
 
-  // Fees: scan NPM for VLM-owned tokenIds (Transfer to=VLM), then per tokenId sum Collect-DecreaseLiquidity events
+  // Fees: discover every tokenId the protocol has ever managed, then sum Collect - DecreaseLiquidity.
+  //
+  // Strategy for tokenId discovery (we need ALL of them, across current + old VLM):
+  //   1. Scan PositionMinted on both VLM addresses → tokenId + pairKey for each position opened
+  //   2. Scan PositionRebalanced on both VLM addresses → oldTokenId (burned) + newTokenId + pairKey
+  //   3. Safety net: also scan Transfer→VRT (current VLM mints with recipient=VRT)
+  //   Union of all three sets = complete picture, independent of which address received the NFT.
+  const vlmAddresses: Address[] = [
+    (addresses as Record<string, Address>)['ValinityLiquidityManager'],
+    '0xfd2D528afAA5e7D58811ae859080E5e974Aa7392', // old VLM
+  ];
   const vrtAddress = (addresses as Record<string, Address>)['ValinityReserveTreasury'];
   const npmAddress = (addresses as Record<string, Address>)['UniswapV3NonfungiblePositionManager'];
   const transferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)');
   const collectEvent = parseAbiItem('event Collect(uint256 indexed tokenId, address recipient, uint256 amount0, uint256 amount1)');
   const decreaseEvent = parseAbiItem('event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)');
+  const positionMintedEvent = parseAbiItem('event PositionMinted(bytes32 indexed pairKey, uint256 indexed tokenId, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 amount0, uint256 amount1)');
+  const positionRebalancedEvent = parseAbiItem('event PositionRebalanced(bytes32 indexed pairKey, uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper, uint128 newLiquidity)');
 
-  const transferLogs = await client.getLogs({
+  // STEP 1: Scan PositionMinted + PositionRebalanced to build tokenIdToPairKey AND the managed token set.
+  // This is the authoritative source — works regardless of who received the ERC721 Transfer.
+  const tokenIdToPairKey = new Map<bigint, `0x${string}`>();
+  const managedTokenIds = new Set<bigint>();
+  await Promise.all(vlmAddresses.flatMap(addr => [
+    client.getLogs({
+      address: addr,
+      event: positionMintedEvent,
+      fromBlock: 0n,
+      toBlock: 'latest',
+    }).then(logs => {
+      for (const log of logs) {
+        const tid = log.args.tokenId;
+        const pk = log.args.pairKey;
+        if (tid !== undefined && pk !== undefined) {
+          tokenIdToPairKey.set(tid, pk);
+          managedTokenIds.add(tid);
+        }
+      }
+    }).catch((e: Error) => {
+      yieldWarnings.push(`PositionMinted scan (${addr.slice(0, 8)}…): ${e.message}`);
+    }),
+    client.getLogs({
+      address: addr,
+      event: positionRebalancedEvent,
+      fromBlock: 0n,
+      toBlock: 'latest',
+    }).then(logs => {
+      for (const log of logs) {
+        const oldTid = log.args.oldTokenId;
+        const newTid = log.args.newTokenId;
+        const pk = log.args.pairKey;
+        if (pk !== undefined) {
+          if (oldTid !== undefined) { tokenIdToPairKey.set(oldTid, pk); managedTokenIds.add(oldTid); }
+          if (newTid !== undefined) { tokenIdToPairKey.set(newTid, pk); managedTokenIds.add(newTid); }
+        }
+      }
+    }).catch((e: Error) => {
+      yieldWarnings.push(`PositionRebalanced scan (${addr.slice(0, 8)}…): ${e.message}`);
+    }),
+  ]));
+
+  // STEP 2: Safety-net — also add any tokenIds from Transfer→VRT (catches positions minted
+  // outside a PositionMinted event, e.g. manually or by future VLM versions).
+  await client.getLogs({
     address: npmAddress,
     event: transferEvent,
     args: { to: vrtAddress },
     fromBlock: 0n,
     toBlock: 'latest',
+  }).then(logs => {
+    for (const log of logs) {
+      if (log.args.tokenId !== undefined) managedTokenIds.add(log.args.tokenId);
+    }
   }).catch((e: Error) => {
-    yieldWarnings.push(`Transfer scan: ${e.message}`);
-    return [] as never[];
+    yieldWarnings.push(`Transfer scan (VRT): ${e.message}`);
   });
-  const vlmTokenIds = Array.from(new Set(transferLogs.map(l => l.args.tokenId).filter((id): id is bigint => id !== undefined)));
 
-  // Per-tokenId fee aggregation
+  const vlmTokenIds = Array.from(managedTokenIds);
+
+  // STEP 3: Per-tokenId fee aggregation via Collect - DecreaseLiquidity.
   const feesPerTokenId = new Map<bigint, { collect0: bigint; collect1: bigint; dec0: bigint; dec1: bigint }>();
   if (vlmTokenIds.length > 0) {
     const [collectLogs, decreaseLogs] = await Promise.all([
@@ -554,10 +614,8 @@ const fetchData = async () => {
     }
   }
 
-  // Per-tokenId pair attribution: read positions() for every historical tokenId so we can
-  // bucket each one's (Collect - DecreaseLiquidity) into the right pair, even after rebalances.
-  // Burned NFTs revert positions(); for those we fall back to scanning each VLM's
-  // PositionMinted(pairKey indexed, tokenId indexed) event to recover the pairKey directly.
+  // STEP 4: Per-tokenId pair attribution via positions() (accurate token0/token1/fee for live NFTs).
+  // Burned NFTs revert positions() — those fall back to tokenIdToPairKey already populated above.
   const tokenIdPair = new Map<bigint, { token0: Address; token1: Address; fee: number }>();
   if (vlmTokenIds.length > 0) {
     const histPosResults = await client.multicall({
@@ -571,45 +629,6 @@ const fetchData = async () => {
       tokenIdPair.set(vlmTokenIds[i], { token0: pos[2], token1: pos[3], fee: pos[4] });
     }
   }
-
-  // Fallback attribution by pairKey for burned NFTs (positions() reverts post-burn).
-  const tokenIdToPairKey = new Map<bigint, `0x${string}`>();
-  const vlmAddresses: Address[] = [
-    (addresses as Record<string, Address>)['ValinityLiquidityManager'],
-    '0xfd2D528afAA5e7D58811ae859080E5e974Aa7392',
-  ];
-  const positionMintedEvent = parseAbiItem('event PositionMinted(bytes32 indexed pairKey, uint256 indexed tokenId, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 amount0, uint256 amount1)');
-  const positionRebalancedEvent = parseAbiItem('event PositionRebalanced(bytes32 indexed pairKey, uint256 indexed oldTokenId, uint256 indexed newTokenId, int24 newTickLower, int24 newTickUpper, uint128 newLiquidity)');
-  await Promise.all(vlmAddresses.flatMap(addr => [
-    client.getLogs({
-      address: addr,
-      event: positionMintedEvent,
-      fromBlock: 0n,
-      toBlock: 'latest',
-    }).then(logs => {
-      for (const log of logs) {
-        const tid = log.args.tokenId;
-        const pk = log.args.pairKey;
-        if (tid !== undefined && pk !== undefined) tokenIdToPairKey.set(tid, pk);
-      }
-    }).catch((e: Error) => {
-      yieldWarnings.push(`PositionMinted scan (${addr.slice(0, 8)}…): ${e.message}`);
-    }),
-    client.getLogs({
-      address: addr,
-      event: positionRebalancedEvent,
-      fromBlock: 0n,
-      toBlock: 'latest',
-    }).then(logs => {
-      for (const log of logs) {
-        const tid = log.args.newTokenId;
-        const pk = log.args.pairKey;
-        if (tid !== undefined && pk !== undefined) tokenIdToPairKey.set(tid, pk);
-      }
-    }).catch((e: Error) => {
-      yieldWarnings.push(`PositionRebalanced scan (${addr.slice(0, 8)}…): ${e.message}`);
-    }),
-  ]));
 
   // Helper: V3 amounts from liquidity given current sqrtPrice and tick range
   const TICK_BASE = 1.0001;
