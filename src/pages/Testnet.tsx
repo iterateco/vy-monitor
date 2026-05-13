@@ -187,7 +187,6 @@ const fetchData = async () => {
   const tokenHolders = [
     'ValinityYieldTreasury',
     'ValinityReserveTreasury',
-    'ValinityCapOfficer',
     'ValinityPortal',
     'ValinityDAX',
     'ValinityBuybackOfficer',
@@ -200,13 +199,7 @@ const fetchData = async () => {
         ...vyTokenConfig,
         functionName: 'balanceOf',
         args: [(addresses as Record<string, Address>)[name]]
-      },
-      ...assets.map(asset => ({
-        abi: abis.ERC20,
-        address: asset.address,
-        functionName: 'balanceOf',
-        args: [(addresses as Record<string, Address>)[name]]
-      }))
+      }
     ]
   });
 
@@ -216,7 +209,7 @@ const fetchData = async () => {
   });
 
   const balanceMap = {} as { [K in typeof tokenHolders[number]]: Amount<bigint>[] }
-  const balancesResultBatchLen = assets.length + 1;
+  const balancesResultBatchLen = 1;
 
   for (let i = 0; i < tokenHolders.length; i++) {
     const holder = tokenHolders[i];
@@ -224,19 +217,17 @@ const fetchData = async () => {
       i * balancesResultBatchLen,
       balancesResultBatchLen + i * balancesResultBatchLen
     );
-    balanceMap[holder] = batch.map((r, j) => {
-      const currency = j === 0 ? VY : assets[j - 1].currency;
-      if (r.status === 'success') return new Amount(currency, r.result as bigint);
-      overviewErrors.push(`balanceOf(${holder}, ${currency.symbol}): reverted`);
-      return new Amount(currency, 0n);
+    balanceMap[holder] = batch.map((r) => {
+      if (r.status === 'success') return new Amount(VY, r.result as bigint);
+      overviewErrors.push(`balanceOf(${holder}, VY): reverted`);
+      return new Amount(VY, 0n);
     })
   }
 
   const totalUncollateralized = (
     vyTotalSupply -
     balanceMap.ValinityYieldTreasury[0].value -
-    balanceMap.ValinityReserveTreasury[0].value -
-    balanceMap.ValinityCapOfficer[0].value
+    balanceMap.ValinityReserveTreasury[0].value
   );
 
   let tvl = 0n;
@@ -383,9 +374,9 @@ const fetchData = async () => {
     : 0n;
 
   return {
+    circulatingSupply: new Amount(VY, totalUncollateralized),
+    vyTotalSupply: new Amount(VY, vyTotalSupply),
     overview: {
-      'VY Total Supply': new Amount(VY, vyTotalSupply),
-      'Total Uncollateralized': new Amount(VY, totalUncollateralized),
       TVL: new Amount(USD, tvl),
       MTP: mtp
     },
@@ -463,7 +454,20 @@ function Content({ data }: { data: MonitorData }) {
   return (
     <div className="monitor">
       <div>
-        <h2>Overview</h2>
+        <h2>Balances</h2>
+        <div className="box">
+          <BalanceTable
+            data={data.balanceMap}
+            footerRows={[
+              { label: 'Circulating Supply', value: data.circulatingSupply },
+              { label: 'VY Total Supply', value: data.vyTotalSupply },
+            ]}
+          />
+        </div>
+      </div>
+
+      <div>
+        <h2>Current Stats</h2>
         <div className={`box ${data.overviewErrors.length > 0 ? 'box--error' : data.overviewWarnings.length > 0 ? 'box--warning' : ''}`}>
           {data.overviewErrors.length > 0 && (
             <div className="error-list">
@@ -484,14 +488,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Balances</h2>
-        <div className="box">
-          <BalanceTable data={data.balanceMap} />
-        </div>
-      </div>
-
-      <div>
-        <h2>Pool (VY/USDC)</h2>
+        <h2>Pool (VY/USDC) <a href="https://sepolia.etherscan.io/address/0x2AA077D60470693702c3F8392d0E13353fb19e3C" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
         <div className="box">
           {renderValues(data.pool)}
         </div>
@@ -635,8 +632,9 @@ function renderValues(
   );
 }
 
-const BalanceTable = ({ data }: {
+const BalanceTable = ({ data, footerRows }: {
   data: { [key: string]: Amount<bigint>[] }
+  footerRows?: { label: string; value: Amount<bigint> }[]
 }) => {
   const totals: Amount<bigint>[] = [];
 
@@ -672,16 +670,16 @@ const BalanceTable = ({ data }: {
           </tr>
         ))}
       </tbody>
-      <tfoot>
-        <tr>
-          <td>Total</td>
-          {totals.map(amount => (
-            <td key={amount.currency.symbol}>
-              <Value includeSybmol={false}>{amount}</Value>
-            </td>
+      {footerRows && footerRows.length > 0 && (
+        <tfoot>
+          {footerRows.map(row => (
+            <tr key={row.label}>
+              <td>{row.label}</td>
+              <td><Value includeSybmol={false}>{row.value}</Value></td>
+            </tr>
           ))}
-        </tr>
-      </tfoot>
+        </tfoot>
+      )}
     </table>
   )
 }
