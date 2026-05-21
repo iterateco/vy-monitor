@@ -513,7 +513,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Valinity Arbitrage Exchange</h2>
+        <h2>Valinity Arbitrage Exchange <a href="https://sepolia.etherscan.io/address/0xcCB5b1c33b69eC187F0a981bE0271871A00a89Ea" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
         <div className={`box ${data.dax.errors.length > 0 ? 'box--error' : ''}`}>
           {data.dax.errors.length > 0 && (
             <div className="error-list">
@@ -571,7 +571,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Buyback</h2>
+        <h2>Buyback <a href="https://sepolia.etherscan.io/address/0x96Ec2cd25f464817986fA50f9EC7e3ad22CD54F2" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
         <div className="box">
           {renderValues(data.buyback)}
         </div>

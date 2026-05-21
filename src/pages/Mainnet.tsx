@@ -1006,7 +1006,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Buyback</h2>
+        <h2>Buyback <a href="https://etherscan.io/address/0x4B97D45d276084c1C5BDBd0aa29B417cE02bE2F6" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
         <div className="box">
           {renderValues(data.buyback)}
         </div>
@@ -1020,7 +1020,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Valinity Arbitrage Exchange</h2>
+        <h2>Valinity Arbitrage Exchange <a href="https://etherscan.io/address/0xD256C672616f7c5DEE3e42a8199f121EE08401B7" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
         <div className={`box ${data.dax.errors.length > 0 ? 'box--error' : ''}`}>
           {data.dax.errors.length > 0 && (
             <div className="error-list">
