@@ -283,7 +283,7 @@ const fetchData = async () => {
   const daxSwapsPaused = daxGet(4, 'swapsPaused', false);
 
   // Fetch each pool's reserves
-  type DaxPool = { asset: Address; symbol: string; reserveVY: Amount<bigint>; reserveAsset: Amount<bigint> };
+  type DaxPool = { asset: Address; symbol: string; reserveVY: Amount<bigint>; reserveAsset: Amount<bigint>; reserveAssetUSD: Amount<bigint> };
   const daxPools: DaxPool[] = [];
   if (numPools > 0n) {
     const poolContracts = [];
@@ -311,11 +311,29 @@ const fetchData = async () => {
           const decimals = tokenInfo[1].status === 'success' ? tokenInfo[1].result as number : 18;
           currency = { symbol, decimals };
         }
+        // For known collateral assets, use TWAP spot price.
+        // For unknown assets (e.g. TSLA, NVDA, LINK), the DAX is arbitraged against Uniswap,
+        // so asset reserve value ≈ VY reserve value. Derive from the Uniswap VY/USDC price.
+        let reserveAssetUSD: Amount<bigint>;
+        if (known) {
+          const spotPriceRaw = known.spotPrice.value as bigint;
+          const assetDecimals = currency!.decimals ?? 18;
+          const scaleFactor = BigInt(10) ** BigInt(18 - assetDecimals);
+          reserveAssetUSD = new Amount(USD, spotPriceRaw > 0n
+            ? (reserveAsset * scaleFactor * spotPriceRaw) / BigInt(1e18)
+            : 0n);
+        } else {
+          // reserveVY_dax * usdcReserve_uni * 10^12 / vyReserve_uni gives 18-decimal USD
+          reserveAssetUSD = new Amount(USD, vyReserve > 0n
+            ? (reserveVY * usdcReserve * BigInt(10 ** 12)) / vyReserve
+            : 0n);
+        }
         daxPools.push({
           asset,
           symbol: symbol!,
           reserveVY: new Amount(VY, reserveVY),
           reserveAsset: new Amount(currency!, reserveAsset),
+          reserveAssetUSD,
         });
       } else {
         daxErrors.push(`getPoolReserves(${i}): ${(r.error as Error).message ?? 'reverted'}`);
@@ -1047,6 +1065,7 @@ function Content({ data }: { data: MonitorData }) {
                       [`${pool.symbol} Token`]: pool.asset,
                       'VY Reserve': pool.reserveVY,
                       [`${pool.symbol} Reserve`]: pool.reserveAsset,
+                      [`${pool.symbol} Reserve (USDC)`]: pool.reserveAssetUSD,
                     })}
                   </div>
                 ))}
