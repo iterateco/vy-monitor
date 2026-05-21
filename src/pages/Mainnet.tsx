@@ -167,7 +167,6 @@ const fetchData = async () => {
         { ...vyTokenConfig, functionName: 'totalSupply' },
         { ...pairConfig, functionName: 'getReserves' },
         { ...pairConfig, functionName: 'token0' },
-        { ...vyTokenConfig, functionName: 'accumulatedFees' },
       ],
       allowFailure: true
     }),
@@ -177,9 +176,6 @@ const fetchData = async () => {
   const vyTotalSupply = overviewResults[0].status === 'success'
     ? overviewResults[0].result as bigint
     : (() => { overviewErrors.push(`totalSupply: ${(overviewResults[0].error as Error).message ?? 'reverted'}`); return 0n; })();
-  const vyAccumulatedFees = overviewResults[3].status === 'success'
-    ? overviewResults[3].result as bigint
-    : (() => { overviewErrors.push(`accumulatedFees: ${(overviewResults[3].error as Error).message ?? 'reverted'}`); return 0n; })();
   const mtpPrice = mtpResponse?.data?.[0]?.market_trigger_price;
   const mtp = mtpPrice != null
     ? new Amount(USD, BigInt(Math.round(parseFloat(mtpPrice) * 1e18)))
@@ -825,17 +821,15 @@ const fetchData = async () => {
     }
   }
 
-  // --- Cap Health (caps + deployed VY ≈ circulating) ---
-  // The lag exists because the VY token batches collected fees and only flushes
-  // them to the VCO every `transfersPerProcess` transfers. Until the next flush,
-  // those fees sit in the token contract as `accumulatedFees`. The lag must
-  // exactly equal that pending balance — any drift is a real issue.
+  // --- Cap Health (totalCaps must equal circulating supply) ---
+  // Fees now flow directly to VBBO (not batched through the VY token to VCO),
+  // so accumulatedFees will always be zero and there is no lag. Total caps
+  // must equal the circulating supply at all times.
   const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
-  const capHealthy = capCirculatingLag === vyAccumulatedFees;
+  const capHealthy = capCirculatingLag === 0n;
   if (!capHealthy) {
     overviewErrors.push(
-      `Cap-circulating mismatch: lag = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY, ` +
-      `VY token accumulatedFees = ${(Number(vyAccumulatedFees) / 1e18).toFixed(2)} VY (expected exact match)`
+      `Cap-circulating mismatch: (totalCaps + totalDeployedVY) − circulating = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected 0)`
     );
   }
 
@@ -884,7 +878,6 @@ const fetchData = async () => {
     vyTotalSupply: new Amount(VY, vyTotalSupply),
     overview: {
       'Total Caps': new Amount(VY, totalCaps),
-      'Lagged VY Token Fee': new Amount(VY, vyAccumulatedFees),
       'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
       TVL: new Amount(USD, tvl),
       MTP: mtp,
