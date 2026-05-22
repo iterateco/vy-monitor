@@ -407,6 +407,17 @@ const fetchData = async () => {
       'VY Reserve': new Amount(VY, vyReserve),
       'USDC Reserve': new Amount(USDC, usdcReserve),
     },
+    lps: (() => {
+      const vyInLPs = totalVYReserves + vyReserve;
+      const portalVY = balanceMap['ValinityPortal'][0].value;
+      const vyInUserWallets = totalUncollateralized > (vyInLPs + portalVY) ? totalUncollateralized - (vyInLPs + portalVY) : 0n;
+      return {
+        'VY in DAX': new Amount(VY, totalVYReserves),
+        'VY in VY/USDC Pool': new Amount(VY, vyReserve),
+        'Total VY in LPs': new Amount(VY, vyInLPs),
+        'VY in User Wallets': new Amount(VY, vyInUserWallets),
+      };
+    })(),
     assets: assets.map(asset => omit(asset, ['currency'])),
     dax: {
       overview: {
@@ -476,9 +487,13 @@ function Content({ data }: { data: MonitorData }) {
         <div className="box">
           <BalanceTable
             data={data.balanceMap}
-            footerRows={[
-              { label: 'Circulating Supply', value: data.circulatingSupply },
+            headerRows={[
               { label: 'VY Total Supply', value: data.vyTotalSupply },
+            ]}
+            footerRows={[
+              { label: 'VY in LPs', value: data.lps['Total VY in LPs'] },
+              { label: 'Circulating Supply', value: data.circulatingSupply },
+              { label: 'VY in User Wallets', value: data.lps['VY in User Wallets'] },
             ]}
           />
         </div>
@@ -651,8 +666,9 @@ function renderValues(
   );
 }
 
-const BalanceTable = ({ data, footerRows }: {
+const BalanceTable = ({ data, headerRows, footerRows }: {
   data: { [key: string]: Amount<bigint>[] }
+  headerRows?: { label: string; value: Amount<bigint> }[]
   footerRows?: { label: string; value: Amount<bigint> }[]
 }) => {
   const totals: Amount<bigint>[] = [];
@@ -676,6 +692,12 @@ const BalanceTable = ({ data, footerRows }: {
         </tr>
       </thead>
       <tbody>
+        {headerRows && headerRows.map(row => (
+          <tr key={row.label}>
+            <td>{row.label}</td>
+            <td><Value includeSybmol={false}>{row.value}</Value></td>
+          </tr>
+        ))}
         {Object.entries(data).map(([holder, amounts]) => (
           <tr key={holder}>
             <td>

@@ -873,12 +873,17 @@ const fetchData = async () => {
     ? new Amount(USD, ((vrtCollateralUSD + lpHoldingsUSD) * 10n ** 18n) / roundFloorDenominator)
     : 'Unavailable' as never;
 
+  const daxTVL = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
+  tvl += lpHoldingsUSD + daxTVL;
+
   return {
     circulatingSupply: new Amount(VY, totalUncollateralized),
     vyTotalSupply: new Amount(VY, vyTotalSupply),
     overview: {
-      'Total Caps': new Amount(VY, totalCaps),
-      'Cap Health': capHealthy ? '✅ OK' : '⚠ Mismatch',
+      'Total Caps': new Amount(VY, totalCaps + totalDeployedVY),
+      'VCO Caps': new Amount(VY, totalCaps),
+      'VRYO Caps': new Amount(VY, totalDeployedVY),
+      'Cap Health': capHealthy ? '✅ Total Caps = Circulating Supply' : `🔴 Off by ${(Number(capCirculatingLag) / 1e18).toFixed(6)} VY`,
       TVL: new Amount(USD, tvl),
       MTP: mtp,
       'Round Floor': roundFloor,
@@ -895,6 +900,17 @@ const fetchData = async () => {
       'VY Reserve': new Amount(VY, vyReserve),
       'USDC Reserve': new Amount(USDC, usdcReserve),
     },
+    lps: (() => {
+      const vyInLPs = totalVYReserves + vyReserve;
+      const portalVY = balanceMap['ValinityPortal'][0].value;
+      const vyInUserWallets = totalUncollateralized > (vyInLPs + portalVY) ? totalUncollateralized - (vyInLPs + portalVY) : 0n;
+      return {
+        'VY in DAX': new Amount(VY, totalVYReserves),
+        'VY in VY/USDC Pool': new Amount(VY, vyReserve),
+        'Total VY in LPs': new Amount(VY, vyInLPs),
+        'VY in User Wallets': new Amount(VY, vyInUserWallets),
+      };
+    })(),
     assets: assets.map(asset => omit(asset, ['currency'])),
     dax: {
       overview: {
@@ -976,9 +992,13 @@ function Content({ data }: { data: MonitorData }) {
         <div className="box">
           <BalanceTable
             data={data.balanceMap}
-            footerRows={[
-              { label: 'Circulating Supply', value: data.circulatingSupply },
+            headerRows={[
               { label: 'VY Total Supply', value: data.vyTotalSupply },
+            ]}
+            footerRows={[
+              { label: 'VY in LPs', value: data.lps['Total VY in LPs'] },
+              { label: 'Circulating Supply', value: data.circulatingSupply },
+              { label: 'VY in User Wallets', value: data.lps['VY in User Wallets'] },
             ]}
           />
         </div>
@@ -1096,8 +1116,10 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Yield Optimization (VRYO + VLM)</h2>
+        <h2>Valinity Reserves <a href="https://etherscan.io/address/0x06087789B7122fA92E7F9868B10A286Dd4e4C832" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
+
         <div className={`box ${data.yieldOptimization.errors.length > 0 ? 'box--error' : data.yieldOptimization.warnings.length > 0 ? 'box--warning' : ''}`}>
+          <h3>Yield Optimization (VRYO + VLM)</h3>
           {data.yieldOptimization.errors.length > 0 && (
             <div className="error-list">
               {data.yieldOptimization.errors.map((err, i) => (
@@ -1133,39 +1155,39 @@ function Content({ data }: { data: MonitorData }) {
             </>
           )}
         </div>
-      </div>
 
-      <div>
-        <h2>Assets</h2>
-        {data.assets.filter(a => a.isCollateral).map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
-          <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`}>
-            <h3>
-              {symbol}
-              {notCollateral && <span className="info-badge"> (stablecoin — not collateral)</span>}
+        <div style={{ marginTop: '8px' }}>
+          <h3 style={{ marginTop: '12px' }}>Assets</h3>
+          {data.assets.filter(a => a.isCollateral).map(({ symbol, errors, warnings, isCollateral, notCollateral, ...values }) => (
+            <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`} style={{ marginTop: '8px' }}>
+              <h3>
+                {symbol}
+                {notCollateral && <span className="info-badge"> (stablecoin — not collateral)</span>}
+                {errors && errors.length > 0 && (
+                  <span className="error-badge">⚠ {errors.length} error{errors.length > 1 ? 's' : ''}</span>
+                )}
+                {warnings && warnings.length > 0 && !errors?.length && (
+                  <span className="warning-badge">⚠ {warnings.length} warning{warnings.length > 1 ? 's' : ''}</span>
+                )}
+              </h3>
               {errors && errors.length > 0 && (
-                <span className="error-badge">⚠ {errors.length} error{errors.length > 1 ? 's' : ''}</span>
+                <div className="error-list">
+                  {errors.map((err, i) => (
+                    <div key={i} className="error-item">✗ {err}</div>
+                  ))}
+                </div>
               )}
-              {warnings && warnings.length > 0 && !errors?.length && (
-                <span className="warning-badge">⚠ {warnings.length} warning{warnings.length > 1 ? 's' : ''}</span>
+              {warnings && warnings.length > 0 && (
+                <div className="warning-list">
+                  {warnings.map((warn, i) => (
+                    <div key={i} className="warning-item">⚠ {warn}</div>
+                  ))}
+                </div>
               )}
-            </h3>
-            {errors && errors.length > 0 && (
-              <div className="error-list">
-                {errors.map((err, i) => (
-                  <div key={i} className="error-item">✗ {err}</div>
-                ))}
-              </div>
-            )}
-            {warnings && warnings.length > 0 && (
-              <div className="warning-list">
-                {warnings.map((warn, i) => (
-                  <div key={i} className="warning-item">⚠ {warn}</div>
-                ))}
-              </div>
-            )}
-            {renderValues(values)}
-          </div>
-        ))}
+              {renderValues(values)}
+            </div>
+          ))}
+        </div>
       </div>
 
       {data.hasConfigWarnings && (
@@ -1315,8 +1337,9 @@ const PairCard = ({ pair }: { pair: YieldPair }) => {
   );
 };
 
-const BalanceTable = ({ data, footerRows }: {
+const BalanceTable = ({ data, headerRows, footerRows }: {
   data: { [key: string]: Amount<bigint>[] }
+  headerRows?: { label: string; value: Amount<bigint> }[]
   footerRows?: { label: string; value: Amount<bigint> }[]
 }) => {
   const totals: Amount<bigint>[] = [];
@@ -1340,6 +1363,12 @@ const BalanceTable = ({ data, footerRows }: {
         </tr>
       </thead>
       <tbody>
+        {headerRows && headerRows.map(row => (
+          <tr key={row.label}>
+            <td>{row.label}</td>
+            <td><Value includeSybmol={false}>{row.value}</Value></td>
+          </tr>
+        ))}
         {Object.entries(data).map(([holder, amounts]) => (
           <tr key={holder}>
             <td>
