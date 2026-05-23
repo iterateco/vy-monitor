@@ -395,8 +395,10 @@ const fetchData = async () => {
 
   // --- Buyback ---
   const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
+  const oldBuybackAddress = '0xD2F0826af20EbDc833c8418E312F23f373F8500e' as Address;
   const vytAddress = (addresses as Record<string, Address>)['ValinityYieldTreasury'];
-  const [buybackBalanceResult, buybackToVytLogs] = await Promise.all([
+  const erc20TransferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+  const [buybackBalanceResult, buybackToVytLogs, oldBuybackToVytLogs] = await Promise.all([
     client.multicall({
       contracts: [
         { ...vyTokenConfig, functionName: 'balanceOf', args: [buybackAddress] },
@@ -405,8 +407,15 @@ const fetchData = async () => {
     }),
     client.getLogs({
       address: vyTokenConfig.address,
-      event: parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)'),
+      event: erc20TransferEvent,
       args: { from: buybackAddress, to: vytAddress },
+      fromBlock: 0n,
+      toBlock: 'latest',
+    }),
+    client.getLogs({
+      address: vyTokenConfig.address,
+      event: erc20TransferEvent,
+      args: { from: oldBuybackAddress, to: vytAddress },
       fromBlock: 0n,
       toBlock: 'latest',
     }),
@@ -414,10 +423,15 @@ const fetchData = async () => {
   const buybackVyBalance = buybackBalanceResult[0].status === 'success'
     ? buybackBalanceResult[0].result as bigint
     : 0n;
-  const totalVyBoughtBack = buybackToVytLogs.reduce(
+  const newVyBoughtBack = buybackToVytLogs.reduce(
     (sum, log) => sum + (log.args.value ?? 0n),
     0n
   );
+  const oldVyBoughtBack = oldBuybackToVytLogs.reduce(
+    (sum, log) => sum + (log.args.value ?? 0n),
+    0n
+  );
+  const totalVyBoughtBack = oldVyBoughtBack + newVyBoughtBack;
   const collateralLTVFs = assets
     .filter(a => a.isCollateral && a.LTVF.value > 0n)
     .map(a => a.LTVF.value);
@@ -941,7 +955,9 @@ const fetchData = async () => {
       errors: vsrErrors,
     },
     buyback: {
-      'VY Bought Back': new Amount(VY, totalVyBoughtBack),
+      'Total VY Bought Back': new Amount(VY, totalVyBoughtBack),
+      '↳ Old VBBO': new Amount(VY, oldVyBoughtBack),
+      '↳ New VBBO': new Amount(VY, newVyBoughtBack),
       'VY Holdings': new Amount(VY, buybackVyBalance),
       'Buying Power': new Amount(USD, buybackBuyingPower),
     },
