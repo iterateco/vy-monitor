@@ -956,8 +956,6 @@ const fetchData = async () => {
     },
     buyback: {
       'Total VY Bought Back': new Amount(VY, totalVyBoughtBack),
-      '↳ Old VBBO': new Amount(VY, oldVyBoughtBack),
-      '↳ New VBBO': new Amount(VY, newVyBoughtBack),
       'VY Holdings': new Amount(VY, buybackVyBalance),
       'Buying Power': new Amount(USD, buybackBuyingPower),
     },
