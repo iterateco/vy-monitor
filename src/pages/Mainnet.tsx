@@ -890,6 +890,10 @@ const fetchData = async () => {
   const daxTVL = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
   tvl += lpHoldingsUSD + daxTVL;
 
+  // Liquid assets = VRT collateral + DAX non-VY reserves + USDC pool + V3 LP holdings
+  const usdcPoolUSD = usdcReserve * 10n ** 12n; // 6→18 decimal, USDC ≈ $1
+  const liquidAssetsUSD = vrtCollateralUSD + daxTVL + usdcPoolUSD + lpHoldingsUSD;
+
   return {
     circulatingSupply: new Amount(VY, totalUncollateralized),
     vyTotalSupply: new Amount(VY, vyTotalSupply),
@@ -899,6 +903,7 @@ const fetchData = async () => {
       'VRYO Caps': new Amount(VY, totalDeployedVY),
       'Cap Health': capHealthy ? '✅ Total Caps = Circulating Supply' : `🔴 Off by ${(Number(capCirculatingLag) / 1e18).toFixed(6)} VY`,
       TVL: new Amount(USD, tvl),
+      'Current Liquid Assets Value': new Amount(USD, liquidAssetsUSD),
       MTP: mtp,
       'Round Floor': roundFloor,
       'VRYO Cushion': totalUncollateralized > 0n
