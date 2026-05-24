@@ -903,7 +903,7 @@ const fetchData = async () => {
       'VRYO Caps': new Amount(VY, totalDeployedVY),
       'Cap Health': capHealthy ? '✅ Total Caps = Circulating Supply' : `🔴 Off by ${(Number(capCirculatingLag) / 1e18).toFixed(6)} VY`,
       TVL: new Amount(USD, tvl),
-      'Current Liquid Assets Value': new Amount(USD, liquidAssetsUSD),
+      'CLAV': new Amount(USD, liquidAssetsUSD),
       MTP: mtp,
       'Round Floor': roundFloor,
       'VRYO Cushion': totalUncollateralized > 0n
