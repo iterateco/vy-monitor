@@ -36,5 +36,35 @@ export const UniswapV3Pool = [
       { type: 'uint8', name: 'feeProtocol' },
       { type: 'bool', name: 'unlocked' }
     ]
+  },
+  {
+    type: 'function',
+    name: 'feeGrowthGlobal0X128',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }]
+  },
+  {
+    type: 'function',
+    name: 'feeGrowthGlobal1X128',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }]
+  },
+  {
+    type: 'function',
+    name: 'ticks',
+    stateMutability: 'view',
+    inputs: [{ type: 'int24', name: 'tick' }],
+    outputs: [
+      { type: 'uint128', name: 'liquidityGross' },
+      { type: 'int128', name: 'liquidityNet' },
+      { type: 'uint256', name: 'feeGrowthOutside0X128' },
+      { type: 'uint256', name: 'feeGrowthOutside1X128' },
+      { type: 'int56', name: 'tickCumulativeOutside' },
+      { type: 'uint160', name: 'secondsPerLiquidityOutsideX128' },
+      { type: 'uint32', name: 'secondsOutside' },
+      { type: 'bool', name: 'initialized' }
+    ]
   }
 ] as const;

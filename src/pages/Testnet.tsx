@@ -57,6 +57,7 @@ const fetchData = async () => {
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetMetrics', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] },
+      { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
     ] : [];
 
     const results = await client.multicall({
@@ -105,7 +106,7 @@ const fetchData = async () => {
       }
     }
 
-    // Collateral asset — parse remaining results (indices 2..5)
+    // Collateral asset — parse remaining results (indices 2..6)
     const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as unknown as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
@@ -115,7 +116,13 @@ const fetchData = async () => {
     const metrics = results[4].status === 'success'
       ? results[4].result as unknown as typeof defaultMetrics
       : (() => { warnings.push(`getAssetMetrics: ${(results[4].error as Error).message ?? 'reverted'}`); return defaultMetrics; })();
-    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: cap, utilized } = metrics;
+    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: metricsCap, utilized } = metrics;
+    // getAssetMetrics reverts when the VAO TWAP oracle is stale (e.g. PAXG's thin
+    // pool reverts "OLD"), which would zero collateralCap and trip a false
+    // cap-circulating mismatch. Fall back to the raw getAssetCap storage read,
+    // which never touches the oracle, so the cap total stays correct.
+    const rawCap = get(6, 'getAssetCap', 0n);
+    const cap = results[4].status === 'success' ? metricsCap : rawCap;
     const collateralized = get(5, 'getAssetCollateralized', utilized);
 
     const scaleFactor = BigInt(10) ** BigInt(18 - decimals);

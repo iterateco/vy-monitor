@@ -66,6 +66,7 @@ const fetchData = async () => {
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetMetrics', args: [assetAddr] },
       { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] },
+      { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
     ] : [];
 
     const results = await client.multicall({
@@ -115,7 +116,7 @@ const fetchData = async () => {
       }
     }
 
-    // Collateral asset — parse remaining results (indices 2..5)
+    // Collateral asset — parse remaining results (indices 2..6)
     const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as unknown as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
@@ -125,7 +126,13 @@ const fetchData = async () => {
     const metrics = results[4].status === 'success'
       ? results[4].result as unknown as typeof defaultMetrics
       : (() => { warnings.push(`getAssetMetrics: ${(results[4].error as Error).message ?? 'reverted'}`); return defaultMetrics; })();
-    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: cap, utilized } = metrics;
+    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: metricsCap, utilized } = metrics;
+    // getAssetMetrics reverts when the VAO TWAP oracle is stale (e.g. PAXG's thin
+    // pool reverts "OLD"), which would zero collateralCap and trip a false
+    // cap-circulating mismatch. Fall back to the raw getAssetCap storage read,
+    // which never touches the oracle, so the cap total stays correct.
+    const rawCap = get(6, 'getAssetCap', 0n);
+    const cap = results[4].status === 'success' ? metricsCap : rawCap;
     const collateralized = get(5, 'getAssetCollateralized', utilized);
 
     const scaleFactor = BigInt(10) ** BigInt(18 - decimals);
@@ -498,12 +505,17 @@ const fetchData = async () => {
     return { ...p, cfg, tokenId, lastRefresh, lastRebalance, principal };
   });
 
-  // For each pair with a configured pool: read slot0 + active position
+  // For each pair with a configured pool: read slot0, global fee growth, + active position.
+  // feeGrowthGlobal0/1 feed the live uncollected-fee calc below (pool-level, no position
+  // dependency, so they batch here; the per-tick feeGrowthOutside reads need tickLower/
+  // tickUpper from positions() and run in a second batch).
   const positionContracts = pairData.flatMap(pd => {
     if (!pd.cfg) return [];
     const poolAddr = pd.cfg[0];
     const c: { abi: typeof abis.UniswapV3Pool | typeof abis.NonfungiblePositionManager; address: Address; functionName: string; args?: readonly unknown[] }[] = [
       { abi: abis.UniswapV3Pool, address: poolAddr, functionName: 'slot0' },
+      { abi: abis.UniswapV3Pool, address: poolAddr, functionName: 'feeGrowthGlobal0X128' },
+      { abi: abis.UniswapV3Pool, address: poolAddr, functionName: 'feeGrowthGlobal1X128' },
     ];
     if (pd.tokenId > 0n) {
       c.push({ ...npmConfig, functionName: 'positions', args: [pd.tokenId] });
@@ -696,10 +708,14 @@ const fetchData = async () => {
     const cur1 = currencyByAddr(token1Addr);
 
     const slot0Result = positionResults[posOff++];
+    const feeGrowthGlobal0Result = positionResults[posOff++];
+    const feeGrowthGlobal1Result = positionResults[posOff++];
     const positionResult = pd.tokenId > 0n ? positionResults[posOff++] : null;
 
     const slot0 = slot0Result?.status === 'success' ? slot0Result.result as unknown as Slot0Tuple : null;
     const position = positionResult?.status === 'success' ? positionResult.result as unknown as PositionTuple : null;
+    const feeGrowthGlobal0 = feeGrowthGlobal0Result?.status === 'success' ? feeGrowthGlobal0Result.result as bigint : 0n;
+    const feeGrowthGlobal1 = feeGrowthGlobal1Result?.status === 'success' ? feeGrowthGlobal1Result.result as bigint : 0n;
 
     if (!slot0) yieldWarnings.push(`slot0(${pd.name}): pool not initialized`);
     if (pd.tokenId > 0n && !position) yieldWarnings.push(`positions(${pd.name} #${pd.tokenId}): unavailable`);
@@ -709,6 +725,8 @@ const fetchData = async () => {
     const tickLower = position ? position[5] : 0;
     const tickUpper = position ? position[6] : 0;
     const liquidity = position ? position[7] : 0n;
+    const feeGrowthInside0Last = position ? position[8] : 0n;
+    const feeGrowthInside1Last = position ? position[9] : 0n;
     const tokensOwed0 = position ? position[10] : 0n;
     const tokensOwed1 = position ? position[11] : 0n;
 
@@ -774,9 +792,13 @@ const fetchData = async () => {
       cumFees0 += add0;
       cumFees1 += add1;
     }
-    // Add live unclaimed (only on the active position; closed positions have tokensOwed=0)
-    cumFees0 += tokensOwed0;
-    cumFees1 += tokensOwed1;
+    // `cumFees0/1` is the realized component (collected − decreased) across every
+    // tokenId this pair has owned. The live unclaimed component (active position's
+    // fees not yet collected) is added in the post-pass below from feeGrowth, since
+    // tokensOwed alone is stale — it only checkpoints on a poke (mint/burn/collect)
+    // and resets to 0 at each rebalance.
+    const histFees0 = cumFees0;
+    const histFees1 = cumFees1;
 
     return {
       name: pd.name,
@@ -799,10 +821,11 @@ const fetchData = async () => {
       principal: new Amount(VY, pd.principal),
       principal0: new Amount(cur0, principal0),
       principal1: new Amount(cur1, principal1),
+      // Placeholders — overwritten with live feeGrowth-based values in the post-pass.
       unclaimedFees0: new Amount(cur0, tokensOwed0),
       unclaimedFees1: new Amount(cur1, tokensOwed1),
-      cumulativeFees0: new Amount(cur0, cumFees0),
-      cumulativeFees1: new Amount(cur1, cumFees1),
+      cumulativeFees0: new Amount(cur0, histFees0 + tokensOwed0),
+      cumulativeFees1: new Amount(cur1, histFees1 + tokensOwed1),
       historicalPositions: attributedTokenIds,
       unattributedTokenIds,
       priceLower,
@@ -810,7 +833,61 @@ const fetchData = async () => {
       priceCurrent,
       token0: cur0,
       token1: cur1,
+      // Inputs for the live uncollected-fee calc (see post-pass).
+      _fee: { histFees0, histFees1, tokensOwed0, tokensOwed1, feeGrowthGlobal0, feeGrowthGlobal1, feeGrowthInside0Last, feeGrowthInside1Last, cur0, cur1 },
     };
+  });
+
+  // --- Live uncollected pool fees (feeGrowth-based) ---
+  // A position's tokensOwed only reflects fees up to its last poke (mint/burn/
+  // collect) and resets to 0 at each rebalance, so it understates current yield
+  // between rebalances. Recover the full claimable amount from the pool's
+  // feeGrowth accumulators: accrued = liquidity × (feeGrowthInside_now −
+  // feeGrowthInside_last) / 2^128, added to tokensOwed. This feeds both the
+  // displayed unclaimed/cumulative fees AND the round-floor LP valuation, so the
+  // floor reflects pool yield earned-but-not-yet-collected (collected fees are
+  // already counted: VRYO sweeps them to VRT, where they show up as collateral).
+  const Q128 = 2n ** 128n;
+  const u256 = (x: bigint) => BigInt.asUintN(256, x);
+  type TickTuple = readonly [bigint, bigint, bigint, bigint, bigint, bigint, number, boolean];
+  const feePositions = yieldPairs.filter(
+    (p): p is Extract<typeof p, { configured: true }> => p.configured && p.hasPosition
+  );
+  const tickContracts = feePositions.flatMap(p => [
+    { abi: abis.UniswapV3Pool, address: p.poolAddress, functionName: 'ticks', args: [p.tickLower] },
+    { abi: abis.UniswapV3Pool, address: p.poolAddress, functionName: 'ticks', args: [p.tickUpper] },
+  ]);
+  const tickResults = tickContracts.length > 0
+    ? await client.multicall({ contracts: tickContracts, allowFailure: true })
+    : [];
+  feePositions.forEach((p, i) => {
+    const f = p._fee;
+    let fee0 = f.tokensOwed0;
+    let fee1 = f.tokensOwed1;
+    const lowerR = tickResults[i * 2];
+    const upperR = tickResults[i * 2 + 1];
+    const haveTicks = lowerR?.status === 'success' && upperR?.status === 'success';
+    const haveGlobals = f.feeGrowthGlobal0 > 0n && f.feeGrowthGlobal1 > 0n;
+    if (haveTicks && haveGlobals) {
+      const lower = lowerR.result as unknown as TickTuple;
+      const upper = upperR.result as unknown as TickTuple;
+      // feeGrowthInside per Uniswap V3 core (subtractions wrap mod 2^256 by design).
+      const inside = (global: bigint, loOutside: bigint, upOutside: bigint): bigint => {
+        const below = p.currentTick >= p.tickLower ? loOutside : u256(global - loOutside);
+        const above = p.currentTick < p.tickUpper ? upOutside : u256(global - upOutside);
+        return u256(global - below - above);
+      };
+      const in0 = inside(f.feeGrowthGlobal0, lower[2], upper[2]);
+      const in1 = inside(f.feeGrowthGlobal1, lower[3], upper[3]);
+      fee0 += (p.liquidity * u256(in0 - f.feeGrowthInside0Last)) / Q128;
+      fee1 += (p.liquidity * u256(in1 - f.feeGrowthInside1Last)) / Q128;
+    } else {
+      yieldWarnings.push(`live fees(${p.name}): tick/feeGrowth read failed — falling back to tokensOwed`);
+    }
+    p.unclaimedFees0 = new Amount(f.cur0, fee0);
+    p.unclaimedFees1 = new Amount(f.cur1, fee1);
+    p.cumulativeFees0 = new Amount(f.cur0, f.histFees0 + fee0);
+    p.cumulativeFees1 = new Amount(f.cur1, f.histFees1 + fee1);
   });
 
   // VRYO now sizes deployed capital as ~85% of circulating VY, leaving a 15%
@@ -848,7 +925,13 @@ const fetchData = async () => {
   }
 
   // --- Round Floor (USD per VY backing across VRT collateral + LP holdings) ---
-  // Numerator: Σ USD value of VRT collateral + Σ USD value of LP-pair holdings (incl. unclaimed fees)
+  // Numerator: Σ USD value of VRT collateral + Σ USD value of LP-pair holdings.
+  //   Pool yield is fully captured across two channels:
+  //     1. Realized fees — VRYO collects on rebalance and sweeps to VRT, so they
+  //        land in `vrtCollateralUSD` (the VCO leg) as extra reserve.
+  //     2. Live unclaimed fees — the active position's earned-but-uncollected
+  //        fees, recovered above from feeGrowth (not stale tokensOwed) and folded
+  //        into yp.unclaimedFees0/1, which this loop adds to LP principal.
   // Denominator: Σ caps in VCO + Total VY Deployed
   const priceFor = (addr: Address): bigint => {
     const known = assets.find(a => a.address.toLowerCase() === addr.toLowerCase());
