@@ -1,0 +1,26 @@
+{
+  "contract": "ValinityLiquidityManager (VLM)",
+  "proxy": "0x920AbB09be0abeB9140fB0c69A7cD523b65D2Aa0",
+  "impl": "0xcB147742077f512765a7CD1D14C1ABE6684323D9",
+  "library": {
+    "name": "V3SnapbackGate",
+    "address": "0x5c3baf319CdF830c00de45aF1e7AC9535B9ef251"
+  },
+  "source_proof": {
+    "VLM": {
+      "commit": "c4bfc30",
+      "file": "ValinityLiquidityManager.sol",
+      "metaIpfs": "d69e1a26f6c7cdd6b5b629a208e1bb06f02f03011dc0b7ae26f49ff149a301a9",
+      "metaStrippedBytes": 24433,
+      "note": "workspace a89611b is 1 ADMIN-only guard line ahead (setSnapbackPairs dedup), not yet deployed"
+    },
+    "V3SnapbackGate": {
+      "solcInput": "211db5a05db2a1efc759f970bcad1ca9",
+      "metaIpfs": "08a6c1e9eb0522731703f56cb97863c892cdcd52e07c64b1688ee70f309b",
+      "metaStrippedBytes": 5129
+    }
+  },
+  "solc": "0.8.27+commit.40a35a09",
+  "method": "metadata-IPFS-hash equality (gold standard) — both VLM impl and linked library match live runtime",
+  "verified_date": "2026-06-01"
+}

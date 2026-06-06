@@ -1,0 +1,59 @@
+{
+  "contract": "ValinityCapOfficer (VCO)",
+  "proxy": "0x2f02415989C3e02061a8e451EF64Dc59e5c0051C",
+  "liveImpl": "0x294841f3763ac285130156d780cbf4b5949aec8b",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard)",
+    "liveMetadataIpfs": "1220ba8bec80434c2375859e803e9105de063e050d1e3b11c4e5318796e9505afe07",
+    "recompiledMetadataIpfs": "1220ba8bec80434c2375859e803e9105de063e050d1e3b11c4e5318796e9505afe07",
+    "match": true,
+    "sourceCommit": "e268bbd (\"updates\") — NOT workspace HEAD. Workspace/HEAD 8bb172a is ONE COMMIT AHEAD (undeployed; recompiles to 1220cdbfc76f…, 11992 B). Audit the e268bbd version.",
+    "buildInfo": "983cffc3daf5059519bc785200f6589b.json (also matches via 21058a62)",
+    "solc": "0.8.27+commit.40a35a09 (native)",
+    "optimizer": {
+      "enabled": true,
+      "runs": 100
+    },
+    "evmVersion": "cancun",
+    "note": "Live VCO impl 0x294841f3 = git commit e268bbd. Workspace is ahead — verification essential. Closure repo files: [\"contracts/interfaces/IValinityPositions.sol\",\"contracts/library/V3LiquidityMath.sol\",\"contracts/officer/ValinityCapOfficer.sol\",\"contracts/token/ValinityToken.sol\",\"contracts/treasury/ValinityReserveTreasury.sol\"]"
+  },
+  "audit": {
+    "workflow": "wdkc3ozml (97 agents, 10 survived / 77 refuted) — high-rigor (9 dimensions)",
+    "verdict": "CLOSED ledger; 0 permissionless-exploitable. Pure accounting (holds no tokens); every mutator OFFICER/ADMIN-gated; arithmetic sound (overflow checks + floor). VY CANNOT be under-backed via any permissionless/view/oracle path. Σcaps≈57,676 ≪ circulating 371,202, utilized=0 → no standing overstatement.",
+    "mediums": "(1) V3-LP undercount: _calculateTVL/_calculateLTVF read only raw balanceOf(VRT), ignore VRT's Uniswap V3 LP NFTs (~100x understatement live; floorPrice~0) -> views misrepresent backing + LTV-F cap-selection mis-routes; BUT conservative + reshuffle-only (amounts officer-supplied) -> no under-backing; NOT fixed in newer undeployed version. (2) VGO 0x0a6C2117 (gas officer) UNAUDITED but holds OFFICER_ROLE w/ unbounded increaseAssetCap -> audit or revoke before handoff.",
+    "goldenRule": "Conservation enforced per-OFFICER, NOT in VCO (cap amounts are officer-supplied; VCO is a faithful but blind ledger). Live OFFICERs: VLO, VAO, VYO(done), VBBO, buyback-2 0x3d9d78CD, VRYO(closed-leg must net-zero), VGO(unaudited). VLM does NOT hold OFFICER_ROLE (closed-leg moot).",
+    "adminTrust": "Dominant under-backing levers BOTH ADMIN: _authorizeUpgrade @815 (replace logic) > setAssetCap @304 (arbitrary cap, bypasses floor+officers). Timelock both + setVAO/removeAsset/floor params. Both DEFAULT_ADMIN+ADMIN @0x8310eA7E -> gov + renounce."
+  },
+  "closureExternal": [
+    "@openzeppelin/contracts/access/AccessControl.sol",
+    "@openzeppelin/contracts/access/IAccessControl.sol",
+    "@openzeppelin/contracts/interfaces/IERC1363.sol",
+    "@openzeppelin/contracts/interfaces/IERC165.sol",
+    "@openzeppelin/contracts/interfaces/IERC1967.sol",
+    "@openzeppelin/contracts/interfaces/IERC20.sol",
+    "@openzeppelin/contracts/interfaces/draft-IERC1822.sol",
+    "@openzeppelin/contracts/interfaces/draft-IERC6093.sol",
+    "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol",
+    "@openzeppelin/contracts/proxy/beacon/IBeacon.sol",
+    "@openzeppelin/contracts/proxy/utils/Initializable.sol",
+    "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol",
+    "@openzeppelin/contracts/token/ERC20/ERC20.sol",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+    "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol",
+    "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+    "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol",
+    "@openzeppelin/contracts/utils/Address.sol",
+    "@openzeppelin/contracts/utils/Context.sol",
+    "@openzeppelin/contracts/utils/Errors.sol",
+    "@openzeppelin/contracts/utils/LowLevelCall.sol",
+    "@openzeppelin/contracts/utils/Panic.sol",
+    "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol",
+    "@openzeppelin/contracts/utils/StorageSlot.sol",
+    "@openzeppelin/contracts/utils/TransientSlot.sol",
+    "@openzeppelin/contracts/utils/cryptography/ECDSA.sol",
+    "@openzeppelin/contracts/utils/introspection/ERC165.sol",
+    "@openzeppelin/contracts/utils/introspection/IERC165.sol",
+    "@openzeppelin/contracts/utils/math/Math.sol",
+    "@openzeppelin/contracts/utils/math/SafeCast.sol"
+  ]
+}

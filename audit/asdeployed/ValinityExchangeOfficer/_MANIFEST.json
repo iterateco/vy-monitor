@@ -1,0 +1,49 @@
+{
+  "contract": "ValinityExchangeOfficer (VEO)",
+  "proxy": "0x48C88B807B13593BAc4a5ea75EbD4fec83F827D7",
+  "liveImpl": "0xd20b0c8be6de08a1235ed75ed814cc1fabbe64a5",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard)",
+    "liveMetadataIpfs": "1220f6c52b99fe3c7ffaabdadcfb2c704b2269dca34cbb411b3a5c5e68f412cae4a7",
+    "recompiledMetadataIpfs": "1220f6c52b99fe3c7ffaabdadcfb2c704b2269dca34cbb411b3a5c5e68f412cae4a7",
+    "match": true,
+    "sourceCommit": "11dcc32 (== current workspace HEAD, git clean)",
+    "buildInfo": "21058a62662d5b8eba568ecece2c16a8.json",
+    "solc": "0.8.27+commit.40a35a09 (native macosx-amd64)",
+    "optimizer": {
+      "enabled": true,
+      "runs": 100
+    },
+    "evmVersion": "cancun",
+    "note": "On-disk deployments/eth_mainnet/ValinityExchangeOfficer.json is a STALE/different-settings compile (metadata 122060cbd903…, deployedBytecode does NOT match live) — DO NOT trust it. The build-info recompile of the workspace source reproduces the live metadata EXACTLY. Closure = 1 repo file + 22 stock OZ v5 files."
+  },
+  "audit": {
+    "workflow": "wqoqdl1g7 (46 agents, 5 survived all-Info / 32 refuted)",
+    "verdict": "CLOSED non-admin; 0 Crit/High/Med/Low; CC-1 fully discharged (no atomic sandwich primitive)",
+    "handoffNote": "Migrate ADMIN_ROLE (not just DEFAULT_ADMIN_ROLE) to timelocked gov — _authorizeUpgrade @1002 is ADMIN_ROLE-gated. Live dormant: varo==0, 0 traders."
+  },
+  "closureExternal": [
+    "@openzeppelin/contracts/access/AccessControl.sol",
+    "@openzeppelin/contracts/access/IAccessControl.sol",
+    "@openzeppelin/contracts/interfaces/IERC1363.sol",
+    "@openzeppelin/contracts/interfaces/IERC165.sol",
+    "@openzeppelin/contracts/interfaces/IERC1967.sol",
+    "@openzeppelin/contracts/interfaces/IERC20.sol",
+    "@openzeppelin/contracts/interfaces/draft-IERC1822.sol",
+    "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol",
+    "@openzeppelin/contracts/proxy/beacon/IBeacon.sol",
+    "@openzeppelin/contracts/proxy/utils/Initializable.sol",
+    "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+    "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+    "@openzeppelin/contracts/utils/Address.sol",
+    "@openzeppelin/contracts/utils/Context.sol",
+    "@openzeppelin/contracts/utils/Errors.sol",
+    "@openzeppelin/contracts/utils/LowLevelCall.sol",
+    "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol",
+    "@openzeppelin/contracts/utils/StorageSlot.sol",
+    "@openzeppelin/contracts/utils/TransientSlot.sol",
+    "@openzeppelin/contracts/utils/introspection/ERC165.sol",
+    "@openzeppelin/contracts/utils/introspection/IERC165.sol"
+  ]
+}

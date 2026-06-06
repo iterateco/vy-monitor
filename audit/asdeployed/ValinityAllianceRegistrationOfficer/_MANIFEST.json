@@ -1,0 +1,43 @@
+{
+  "contract": "ValinityAllianceRegistrationOfficer (VARO) — 4-tier paid access ladder + referral revenue accounting + V-DAO launcher",
+  "proxy": "0x514F0ABf411Dd63EDD92dAD9ceB7e39e0AeD259f",
+  "implementation": "0xeC4B64014c041079dAc57a1CE698c1E539cA42b6",
+  "delegatecallLib": "0x6A0E4A9D423CbdBC30dc9aE752469cb08d60bCa5 (VAROReferralSettleLib — no storage; operates on VARO storage via storage-ref params)",
+  "deployment": "UUPS proxy (EIP-1967 impl slot -> 0xeC4B64..; admin slot empty). ADMIN_ROLE-gated _authorizeUpgrade. numDeployments=1.",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard), both impl + lib, plus per-file source keccak256",
+    "liveImplMetadataIpfs": "1220e9088c9167a455f5529c1021dbfd69d275352b234f1017ccf08bc03e64f80402",
+    "liveLibMetadataIpfs":  "1220926193999ab8ba752871138fdfbaa896a262ab74feac125ae29f39e3fd3ae75c",
+    "match": "deployment json deployedBytecode metadata IPFS (both ARO impl + LIB) == LIVE on-chain (EXACT). deployment.metadata.sources keccak256 == workspace .sol keccak256 for BOTH files (byte-identical).",
+    "asDeployedKeccak": {
+      "ValinityAllianceRegistrationOfficer.sol": "0xda5b854bb65d932790e1b4c3f9eff40730401f19a8ac90c8f6afd440751bdf93 (96234 bytes, 1823 ln)",
+      "VAROReferralSettleLib.sol": "0xe902c315324f04ab8342a77d3eec9561ade855a4e5d61b449ace4ee92877b15c (14292 bytes, 287 ln)"
+    },
+    "git": "workspace git-clean at HEAD a85f449; alliance dir matches HEAD exactly (deployed from a committed tree, unlike VGO/VGC/VMB).",
+    "solc": "0.8.27+commit.40a35a09",
+    "optimizer": { "enabled": true, "runs": 1 },
+    "evmVersion": "cancun",
+    "note": "Conclusion: workspace == as-deployed == live for BOTH the impl and the delegatecall lib. impl 24405 B runtime, lib 4163 B."
+  },
+  "whatItIs": "A revenue/referral accounting officer + paid-tier gateway + V-DAO launcher. 4 tiers: T1 $0.50 register-on-VEO+bind-referrer; T2 $10 activate-as-referrer; T3 $110 HL-builder ($100 CCTP carve + $10 buyback); T4 $2000 launch a V-DAO. Plus PARTNER (affiliate of an existing V-DAO, T4-treated). USD-denominated prices; non-USDC sized via VDAX-spot x V2-spot composition (no TWAP); caller-supplied slippage bounds. Universal referral credit: bps x source fee deltas (PULL: VEO/VLO/VYO cumulative counters via checkpoints; PUSH: VPO perp + REVENUE_PUSHER_ROLE, trust-based). Claim = settleMine (paginated subtree walk) then claimMine (pays pendingVY). Keeper sweep keeps the global liability counter honest (VGO-reimbursed).",
+  "fundFlow": {
+    "intake": "USDC/ETH/WBTC/PAXG from msg.sender (safeTransferFrom or msg.value+WETH.deposit). All buybacks: USDC->VY on V2 -> VBBO (hardcoded); ETH->WETH->VY on VDAX -> VBBO. CCTP carve: cctpActivationUSDC (100e6) -> hlFactory.predictBuilder(msg.sender) cross-chain (caller-derived recipient).",
+    "mint": "_payOut only: vyt.pullTokens(this, paid) [reverts on shortfall, never partial] + vco.addToHighestLTVFCap(paid) [golden-rule increment, exact]. VARO is a STANDARD officer -> cushion-throttled.",
+    "payout": "T2/T3 referrer: vy.safeTransfer(referrer, paid). T4 referrer (creator or partner): buyAndSplit -> buy bound V-DAO with paid VY on main VDAX, then 50% V-DAO -> referrer + 50% donate to its VDAO-DAX leg (or 100% donate for VGC vdaoDonateAll). All destinations msg.sender-scoped or protocol-determined.",
+    "vdaoLaunch": "factory.launch deploys immutable V-DAO -> mints 100% to VARO; VARO seeds 45% supply+VY on main VDAX (addPool), 45% supply+second-leg on VDAO-DAX (addPool), 10% supply -> creator. Asset payment split half->VY half->second leg (base) or all->VY+buy-parent (layer). Rounding dust stays at VARO (no exit, no rescue).",
+    "noArbitraryDest": "No caller-supplied recipient on any exit. No setVbbo/setVy/setVyt/setVco (init-only immutable sinks/sources). No rescueToken at all. Closed relative to roles."
+  },
+  "liveConfig": {
+    "admin": "0x8310eA7EC55A7Ad6A4288aF683155A124A524a09 (KMS) holds DEFAULT_ADMIN_ROLE + ADMIN_ROLE",
+    "coreRefs": "vy 0x597b2952 / usdc USDC / vyt 0xe58E29c9 / vco 0x2f024159 / vyo 0xA245C9D2 / veo 0x48C88B80 / vlo 0x8Fd8d5eB / vbbo 0x4B97D45d / vdax 0xD256C672 / vsr 0x664b3A81 / vdaoDax 0x37Cd61b3 / v2pool 0xf96cCac0 / uniV2Router 0x7a250d56 / house 0x8310eA7E (KMS)",
+    "dormancy": "FULLY DORMANT + UN-WIRED. VARO holds NONE of its roles: VYT.OFFICER=false (CANNOT mint VY), VCO.OFFICER=false, VDAX.POOL_CREATOR=false, VDAX.swapWhitelist=false, VDAO-DAX.POOL_CREATOR=false, VSR.VARO_ROLE=false. vdaoFactory/hlFactory/cctp=0; weth/wbtc/paxg=0 (only USDC paths configured); vpo=0; vgcDeployer/Recipient=0; vdaoBootstrapped=false. Zero activity: globalCredited/Claimed=0, allReferees=0. paused=false. Even T1 reverts today (VEO.varo=0 per VEO audit). Nothing exploitable while un-wired.",
+    "prices": "tier1 $0.50, tier2 $10, tier3 $110, tier4 $2000, cctpActivation $100. bps: veoTrading 50%/95%(VDAO), vyoYield 5%/9%(VDAO). caps MAX_BPS_VYO=9.9%, MAX_BPS_OTHER=99%."
+  },
+  "audit": {
+    "workflow": "wau2dte5v (30 agents, 8 dimension finders -> adversarial verify -> synthesis). 31 raw findings -> 17 survived / 4 refuted / 10 Low-Info. Tally: 1 Critical, 2 High, 5 Medium, 9 Low. ALL admin-trust/handoff or operational. ZERO permissionless-exploitable.",
+    "verdict": "CLOSED relative to roles. (1) Closed-circuit CONFIRMED: all 6 token-exit vectors (tier buyback, V-DAO launch seed, claim payout, donate, CCTP carve, ETH refund) route to VBBO (init-only immutable) / msg.sender / predictBuilder(msg.sender) / bound-V-DAO+pools / AMM pools. No caller-supplied arbitrary recipient. No rescueToken. No setVbbo/setVy/setVyt/setVco. (2) Golden-rule PROVEN unbreakable: only mint path _payOut pairs vyt.pullTokens(paid)+vco.addToHighestLTVFCap(paid) atomically; pullTokens reverts-on-shortfall/never-partial (verified vs as-deployed VYT) so cap increment is exact and unbacked mint impossible (cushion lives at VYT, immutable, VARO=standard officer). (3) Permissionless surface minimal: PULL referral credit checkpoint-idempotent across settleMine/sweep, bounded by real fees x bps (<=99%); self-dealing net-negative; PUSH sources trust-gated.",
+    "findings": "C1 _authorizeUpgrade inherits all officer roles once wired (dominant lever, no timelock). H1 setHlFactory redirects every user's CCTP $100 (admin-rotatable, no validation, 4 entry points, no L1 recovery; user funds not protocol principal). H2 setTierUsdcPrice no floor/ceiling (free tiers / free V-DAO launches / DoS). M1 un-checkpointed PUSH (vpo + REVENUE_PUSHER_ROLE) -> cushion-bounded unbacked VY to favored referrer (role-trust, by-design; workflow rated Low). M2 cctpActivationUSDC no upper bound + no per-call max -> MEV-inflated user payment (stays closed-circuit). M3 CCTP-fail + hasBuilder-set-before-confirm -> no retry/recovery ($100 stuck). M4 95% bps mint magnitude (by-design economics). M5 one-shot setVgcDeployer/Recipient irreversible (recipient captures house referral economics permanently; NOT VYT.OFFICER_ROLE - corrected the workflow's overstatement). L1 cached vdaoDaxSecondPoolId vs live-resolved main DAX (design-review, depends on out-of-scope VDAO-DAX). L2 minOut=0 sub-$10 buyback legs (protocol-side MEV not user; corrected workflow's 'user loses 90-99%'). L3 spot-V2 quote (caller-bounded). L4 _usdcToAsset tiny-amount truncation (UX). L5 trapped dust. L6 dual-role migrate-both. L7 setHouse post-bootstrap lock (by-design). L8 ETH-refund 23k cap (anti-grief). L9 sweep batch-check-after-beginReward (self-inflicted, not third-party griefing; corrected workflow's Medium).",
+    "refutations": "Workflow refuted 4 of 21 Crit/High/Med + my own analysis: no permissionless arbitrary-dest exfil; no unbounded mint (cushion-bounded); no referral double-credit (checkpoint idempotent); golden-rule cannot be over-stated (pullTokens never partial-mints).",
+    "handoff": "Grant the 6 roles atomically (audited-only); wire factory/hlFactory(canonical)/cctp(+domain liveness)/vpo/vgo/reserve-assets + VEO.setVaro(VARO); treat vpo+REVENUE_PUSHER as minter-adjacent; migrate DEFAULT_ADMIN+ADMIN together + external timelock then renounce; validate non-zero tier prices + sane bps + bounded cctpActivationUSDC; review vgcDeployer/Recipient before the one-shot calls; confirm VDAO-DAX pool-id stability; audit deps (ValinityVDAOFactory / ValinityVDAO token / VDAO-DAX / hlFactory / VPO) before enabling T4/perp."
+  }
+}

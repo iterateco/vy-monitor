@@ -1,0 +1,14 @@
+{
+  "contract": "ValinityBuybackOfficer (VBBO)",
+  "proxy": "0x4B97D45d276084c1C5BDBd0aa29B417cE02bE2F6",
+  "impl": "0xf311e729De3796A14C6B6D5875624F01d57c456a",
+  "source_proof": {
+    "method": "BYTE-IDENTICAL executable bytecode (strongest). bytediff: artifact.deployedBytecode==live (only 2 UUPS immutables differ). Masked recompile of workspace source (commit b77d8d7) vs live = 0 residual diff bytes after masking metadata+immutables (slots 6474/6787, len 32). artifact.deployedBytecode metadata ipfs == LIVE == 0c597412f72c28cbdefe33625787c1b710be3873ce4ef6ea40806263924bcc86.",
+    "workspace_metadata": "d3396fd287c2e7d598251c3c42d876709d1ad874f2da59e331db08fa28f1bf51 (DIFFERS from live by metadata trailer only — a comment/whitespace/import-path change in the source closure since the b77d8d7 deploy; ZERO executable-code difference)",
+    "commit": "b77d8d7 (VBBO upgrade and deployment); no uncommitted changes",
+    "metaStrippedBytes": 10407
+  },
+  "no_external_library": true,
+  "solc": "0.8.27+commit.40a35a09",
+  "verified_date": "2026-06-02"
+}

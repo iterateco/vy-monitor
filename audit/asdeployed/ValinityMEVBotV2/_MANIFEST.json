@@ -1,0 +1,41 @@
+{
+  "contract": "ValinityMEVBotV2 (VMB) — NEW VERSION (re-audit; supersedes the 2026-06-01 audit of impl 0x16b66a22)",
+  "proxy": "0x6f2F45804E58e3240A2fDE9857c0e4F754CC4941",
+  "liveImpl": "0x98d7ee493a44b4f1280004b475dedefbf45fa55d",
+  "priorAuditedImpl": "0x16B66A22C79DaBEAB3D0926937722757544a7589 (OLD — user OK 2026-06-01; UPGRADED away ~block 25209263+; same proxy)",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality via build-info (gold standard)",
+    "liveImplMetadataIpfs": "12206c2d712d5ebb26c8e10d1d8373180a741c510ea506cafd3ac8e55bf1f11b1bd1",
+    "buildInfo": "artifacts/build-info/4515c727fdd1643db5c25946ca0407af.json — its compiled ValinityMEVBotV2.deployedBytecode metadata IPFS == live impl metadata (EXACT)",
+    "asDeployedSourceKeccak": "0x9daff5c30fff36284b36058c7cdf393d4ef8ccd5a0a8aa4e82a7e8339a8f1b74",
+    "matchedSource": "WORKSPACE contracts/arbitrage/ValinityMEVBotV2.sol (DIRTY/uncommitted) == the build-info embedded source byte-identical (same keccak). Workspace HEAD is 3d99bf6 ('Updates') but the .sol is modified on top of it — deployed from the uncommitted workspace (same VYO/VFO pattern).",
+    "solc": "0.8.27+commit.40a35a09 (native)",
+    "optimizer": { "enabled": true, "runs": 100 },
+    "evmVersion": "cancun",
+    "note": "446-line source. Conclusion: workspace == as-deployed == live by metadata-hash gold standard."
+  },
+  "whatChangedVsPriorAudit": "COMPLETE REDESIGN of the arb path. REMOVED: the arbitrary low-level router.call(callData) + per-(router,selector) routerSelectorAllowed allowlist (the prior CC-1 trust-core / Medium). NOW: keeper supplies only borrowVY + a typed Leg[] route {DexKind enum (UniV2/UniV3/ValinityDAX), whitelisted router, tokenIn, tokenOut, extra=fee/poolId}; the CONTRACT builds each swap call itself (recipient hardcoded = bot, amountOutMinimum = 0), sizes each leg at 100% of balance. ADDED: VGO keeper-reward integration (beginReward/payReward, best-effort try/catch; keeper reimbursed by VGO gas-refund+bonus, NOT from arb profit), minProfitVY anti-grief floor. Caller profit-share REMOVED (payoutBps deprecated/inert; 100% profit -> Buyback Officer). Storage layout preserved (payoutBps + routerSelectorAllowed retained as inert; vgo + minProfitVY appended into old __gap; __gap 50->48).",
+  "audit": {
+    "workflow": "wc33q498d (64 agents, 26 survived / 29 refuted) — 8 dimensions, adversarial refutation",
+    "verdict": "CLOSED for the permissionless executeArb flow — PRINCIPAL can never be exfiltrated to an arbitrary address, even by a malicious INTERMEDIATE-leg whitelisted router (any principal diversion breaks finalVY>=borrowVY -> atomic pullTokens rollback; VYBalanceNotZero forces bot to end at 0 VY). Swap calls contract-built (recipient=this, minOut=0), no caller calldata. Treasury made whole every tx; no unbacked mint without an upgrade. Breakable only in admin/upgrade-gated ways (below), none permissionless.",
+    "critical": "C-1 _authorizeUpgrade (ADMIN_ROLE, no on-contract timelock): malicious impl bypasses all invariants and calls vyt.pullTokens(attacker,...) with no repay. CORRECTED: bot is a STANDARD (non-priority) OFFICER on VYT, so pullTokens cushion applies (CUSHION=350k, TARGET=7M) -> ~6.65M VY/call ceiling, repeatable as VYT refills (further VY mint-rate-limited). NOT unbounded. Dominant lever; acute pre-handoff (admin still KMS EOA-class, no timelock).",
+    "high": "H-1 final-leg whitelisted router can skim profit-above-floor: SwapOutputZero checks increase not amount, so a malicious VY-terminal router returns exactly borrowVY+minProfitVY and pockets the rest = actualProfit-minProfitVY (principal safe; 100% of profit if minProfitVY==0). The whitelist IS load-bearing for PROFIT integrity. H-2 setMinProfitVY has no lower bound -> admin can zero the floor (removes H-1 cap + enables VGO-reward farming when vgo set).",
+    "mediums": "M-1 setVgo adds UNAUDITED VGO trust (when set, VGO needs VYT.OFFICER_ROLE -> could pull VYT during payReward; VMB itself can't be drained: best-effort try/catch, nonReentrant, one-way VGO->keeper; vgo=0 live = zero exposure). M-2 dual DEFAULT_ADMIN+ADMIN grant at init -> handoff must migrate AND revoke both (DEFAULT_ADMIN administers ADMIN).",
+    "lows": "L-1 setBuybackOfficer profit-redirect (not principal). L-2 FoT/VY-whitelist-loss are fail-safe reverts (no extraction); minOut=0 sandwich = profit-suppression only, bounded by repay+floor. I6 DexKind no upper-bound check (falls through to DAX; refuted exploitable — ABI rejects out-of-range enum, DAX not whitelisted).",
+    "designImprovement": "MAJOR upgrade vs prior impl 0x16b66a22: removed arbitrary router.call(callData) + per-(router,selector) allowlist (old CC-1 trust-core). Residual exfil surface shrank from 'any whitelisted (router,selector) with attacker calldata' to 'final-leg router skims profit-above-floor (H-1)'.",
+    "handoff": "Migrate DEFAULT_ADMIN+ADMIN (0x8310eA7E) to a governance TimelockController w/ real upgrade delay; readback-assert gov holds BOTH before renouncing either from the KMS (handoff_mevbot_v2_to_governance.ts). Timelock setVgo (do NOT call until VGO audited), setMinProfitVY (keep>0; add vgo!=0=>floor!=0 guard), setRouterWhitelist (canonical routers only), setBuybackOfficer. setPaused->fast guardian. No rescue function (verify upgrades add none). Keep bot on VY fee-exemption list."
+  },
+  "liveConfig": {
+    "vyToken": "0x597b29520098d6aaca3B2e0D1a380315c9240454",
+    "vyt": "0xe58E29c947013B4CBCdb67f90d659c3894BE2974 (bot holds VYT.OFFICER_ROLE = true -> pullTokens)",
+    "buybackOfficer": "0x4B97D45d276084c1C5BDBd0aa29B417cE02bE2F6 (= the known VBBO; profit sink)",
+    "vgo": "0x0 (NOT SET -> keeper rewards DISABLED live; no VGO trust dependency currently)",
+    "execPaused": false,
+    "payoutBps": "100 (DEPRECATED/inert — never read by new code)",
+    "callerCooldown": "604800 (7 days)",
+    "minProfitVY": "70e18 (70 VY anti-grief floor — ACTIVE)",
+    "whitelistedRouters": "UniV2 Router02 (0x7a250d56) + UniV3 SwapRouter02 (0x68b34658) = true; UniV3 SwapRouter(old 0xE592)=false; ValinityDAX(0xD256C672)=false (DexKind.ValinityDAX coded but not whitelisted live)",
+    "admin": "0x8310eA7EC55A7Ad6A4288aF683155A124A524a09 (DEFAULT_ADMIN + ADMIN; same ecosystem KMS; granted @block 25209263)",
+    "activity": "14 ArbExecuted; standing VY balance = 0 (clean between txs). EIP1967 admin slot empty (UUPS)."
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "contract": "ValinityStakingRouter (VSR)",
+  "proxy": "0x664b3A81C963F07C1eb06516c560f9b2193698C7",
+  "liveImpl": "0xe00db9e62c16c89f81b7b31d48cf658f30a571d4",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard)",
+    "liveMetadataIpfs": "1220cb0b8a8ea8dcd0e9a2386d19bbaf32cc5d4b0e04ae53d120357b55532ef89c34",
+    "recompiledMetadataIpfs": "1220cb0b8a8ea8dcd0e9a2386d19bbaf32cc5d4b0e04ae53d120357b55532ef89c34",
+    "match": true,
+    "sourceCommit": "8bb172a (== current workspace HEAD, git clean)",
+    "buildInfo": "7789ac487acdfbcdd805451ddfd227d7.json",
+    "solc": "0.8.27+commit.40a35a09 (native macosx-amd64)",
+    "optimizer": {
+      "enabled": true,
+      "runs": 1
+    },
+    "evmVersion": "cancun",
+    "note": "On-disk deployments/eth_mainnet/ValinityStakingRouter.json is a STALE/different-settings compile (meta 12203a7a9ee0…, deployedBytecode ≠ live, 14745 vs 24076 bytes) — DO NOT trust it (live UUPS-upgraded past committed deploy record). build-info recompile of workspace source reproduces live metadata EXACTLY. Closure = 1 repo file + 25 stock OZ v5 files. NOTE optimizer runs=1 (VEO was runs=100)."
+  },
+  "audit": {
+    "workflow": "w5etym0g7 (69 agents, 12 survived / 48 refuted)",
+    "verdict": "CLOSED non-admin; 0 permissionless-exploitable; CC-1/DAX-L1 DISCHARGED by 30-day lockup + single-direction + principal-clamp (surplus→BBO). Value-conserving. Live: ~564,647 VY staked, 765,748 VDAX custody.",
+    "adminTrust": "1 Critical (UUPS _authorizeUpgrade @1959 = DEFAULT_ADMIN_ROLE, dominant lever) + 1 High (adminExtract→arbitrary to) + 2 Med (officer-setters, YO-solvency freeze) + 2 Low — ALL handoff. Plain OZ AccessControl (no DefaultAdminRules, no upgrade delay) → governance must add external timelock + adminExtract cap.",
+    "handoffNote": "Migrate BOTH DEFAULT_ADMIN_ROLE (upgrade) and ADMIN_ROLE (extract/rescue/officers/pause/tiers) to timelocked gov, then renounce. tierDurationSec floor 30d = CC-1 lockup guard, never lower. YO solvency is a hard covenant.",
+    "crossContract": "VYO/YieldOfficer (HARD top-up solvency + asset-yield bookkeeping; un-try/catch'd) — audit next. VRYO STAKING_ROUTER_ROLE[VSR]=false (heartbeat silent, fail-tolerant)."
+  },
+  "closureExternal": [
+    "@openzeppelin/contracts/access/AccessControl.sol",
+    "@openzeppelin/contracts/access/IAccessControl.sol",
+    "@openzeppelin/contracts/interfaces/IERC1363.sol",
+    "@openzeppelin/contracts/interfaces/IERC165.sol",
+    "@openzeppelin/contracts/interfaces/IERC1967.sol",
+    "@openzeppelin/contracts/interfaces/IERC20.sol",
+    "@openzeppelin/contracts/interfaces/draft-IERC1822.sol",
+    "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol",
+    "@openzeppelin/contracts/proxy/beacon/IBeacon.sol",
+    "@openzeppelin/contracts/proxy/utils/Initializable.sol",
+    "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+    "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+    "@openzeppelin/contracts/utils/Address.sol",
+    "@openzeppelin/contracts/utils/Context.sol",
+    "@openzeppelin/contracts/utils/Errors.sol",
+    "@openzeppelin/contracts/utils/LowLevelCall.sol",
+    "@openzeppelin/contracts/utils/Panic.sol",
+    "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol",
+    "@openzeppelin/contracts/utils/StorageSlot.sol",
+    "@openzeppelin/contracts/utils/TransientSlot.sol",
+    "@openzeppelin/contracts/utils/introspection/ERC165.sol",
+    "@openzeppelin/contracts/utils/introspection/IERC165.sol",
+    "@openzeppelin/contracts/utils/math/Math.sol",
+    "@openzeppelin/contracts/utils/math/SafeCast.sol"
+  ]
+}

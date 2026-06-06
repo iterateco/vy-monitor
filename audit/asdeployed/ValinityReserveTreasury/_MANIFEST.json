@@ -1,0 +1,29 @@
+{
+  "contract": "ValinityReserveTreasury",
+  "mainPath": "contracts/treasury/ValinityReserveTreasury.sol",
+  "solcInputHash": "c5719033f8abb77ad33527a99fe29e05",
+  "solc": "0.8.27+commit.40a35a09",
+  "totalFiles": 29,
+  "valinityClosure": [
+    "contracts/treasury/ValinityReserveTreasury.sol",
+    "contracts/library/V3LiquidityMath.sol",
+    "contracts/interfaces/IValinityPositions.sol"
+  ],
+  "guard": {
+    "abiFunctions": 43,
+    "selectorsInBytecode": 43,
+    "bytecodeSelectorRate": 1,
+    "abiNamesMissingFromSource": [
+      "ADMIN_ROLE()",
+      "BUYBACK_ROLE()",
+      "DEFAULT_ADMIN_ROLE()",
+      "MAX_BATCH_SIZE()",
+      "OFFICER_ROLE()",
+      "UPGRADE_INTERFACE_VERSION()",
+      "VLM_ROLE()",
+      "VRYO_ROLE()",
+      "vyToken()"
+    ],
+    "selectorsMissingFromBytecode": []
+  }
+}

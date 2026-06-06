@@ -1,0 +1,35 @@
+{
+  "contract": "ValinityVDAODAX — private VY-agnostic constant-product AMM for V-DAO liquidity (sibling of the main ValinityDAX)",
+  "proxy": "0x37Cd61b3EF849805E598023f8C14bFcafE5f222E",
+  "implementation": "0xe2883b425168F1FFf70E1F4cED3bB2cC86b288dc",
+  "deployment": "UUPS proxy (EIP-1967 impl slot -> 0xe2883b..; admin slot empty). ADMIN_ROLE-gated _authorizeUpgrade. numDeployments=1.",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard) + per-file source keccak256",
+    "liveImplMetadataIpfs": "1220301b99116f7810ea244e82f3093ebbe98d1af66df94eaf5996edc9f5d538d3a0",
+    "match": "deployment json deployedBytecode metadata IPFS == LIVE impl (EXACT). deployment.metadata.sources keccak256 == workspace .sol + interface keccak256 (BOTH byte-identical).",
+    "asDeployedKeccak": {
+      "contracts/dex/ValinityVDAODAX.sol": "0x7a51746ae0200d73d676a3f39625b763e544e5a06039214bff071318ff33b6ce (495 ln)",
+      "contracts/dex/interfaces/IValinityVDAODAX.sol": "0xf8f61a386048ef085cc35af108f6aa55a4c20d25f54a9e36683ce096218c6c56 (209 ln)"
+    },
+    "git": "workspace git-clean at HEAD a85f449 (same commit as VARO) — deployed from a committed tree.",
+    "solc": "0.8.27+commit.40a35a09",
+    "optimizer": { "enabled": true, "runs": 100 },
+    "evmVersion": "cancun",
+    "note": "impl 7652 B runtime. Conclusion: workspace == as-deployed == live."
+  },
+  "whatItIs": "A private, VY-agnostic constant-product AMM (NO AMM fee) pairing ARBITRARY tokens — holds the 'second leg' of every V-DAO's liquidity (asset/V-DAO and V-DAO/V-DAO pools). Driven by VARO at T4 V-DAO launch (VARO seeds via addPool) and topped up via permissionless donate. The main ValinityDAX simultaneously holds the VY/V-DAO leg. Design (locked): NO LP TOKENS — liquidity permanently locked, seeded once, can only shrink/move via swaps; NO deposit/withdraw/remove path; no admin extraction (rescueTokens blocks pool tokens). Fee-on-transfer native — books reserves against actual balance deltas (Uniswap-V2 style; every V-DAO burns 0.7% between non-exempt parties). On-chain listing rule — a pool leg must be an admin-allowed asset OR a main-DAX-listed (VY-anchored) token. Least privilege — VARO holds only POOL_CREATOR_ROLE + (optionally) a swap-whitelist entry.",
+  "fundFlow": {
+    "in": "addPool seeds (POOL_CREATOR/ADMIN); swapExactIn input (swap-whitelisted); donate (PERMISSIONLESS, one-way add-only). All via _pullToken balance-delta (FoT-safe).",
+    "out": "swapExactIn output -> caller-supplied `recipient` (value-conserving constant-product swap, k preserved exactly since no fee; gated onlySwapWhitelisted). rescueTokens -> admin `to` (non-pool tokens ONLY; isPoolToken guard blocks all pool reserves).",
+    "lockedLiquidity": "There is NO withdraw/remove/extract path for pool reserves. Reserves can only grow (input leg + donate) or shrink via a value-conserving swap output. rescueTokens explicitly reverts on any isPoolToken. => pool liquidity is permanently locked; the only material drain vector is a malicious UUPS upgrade adding a withdraw path.",
+    "noArbitraryDrain": "swapExactIn recipient is arbitrary but the caller pays input for output (no free value); donate cannot withdraw; rescue cannot touch pool tokens. CLOSED relative to roles."
+  },
+  "liveConfig": {
+    "admin": "0x8310eA7EC55A7Ad6A4288aF683155A124A524a09 (KMS) holds DEFAULT_ADMIN_ROLE + ADMIN_ROLE",
+    "mainDax": "0xD256C672616f7c5DEE3e42a8199f121EE08401B7 (= live ValinityDAX; listing-rule anchor; init-only immutable, no setter)",
+    "poolCreator": "VARO 0x514F0ABf = POOL_CREATOR_ROLE TRUE (granted since the VARO audit)",
+    "swapWhitelist": "VARO/MEVBot/VEO all FALSE -> NO swappers whitelisted yet (swaps currently impossible)",
+    "assetAllowed": "USDC/WBTC/WETH/PAXG all TRUE (pre-seeded asset legs)",
+    "dormancy": "getNumPools=0 (NO pools, NO liquidity). poolCreationPaused=false, swapsPaused=false. Effectively dormant: pools can be created (VARO has POOL_CREATOR + assets allowed) but none exist; swaps impossible (no whitelist). Activates with the first V-DAO launch."
+  }
+}

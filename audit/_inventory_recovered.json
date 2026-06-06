@@ -1,0 +1,135 @@
+{
+  "inv:oz-manifest": {
+    "externalContracts": [
+      {
+        "name": "PAXG",
+        "address": "0x45804880de22913dafe09f4980848ece6ecbaf78",
+        "role": "ERC-20 collateral/reserve asset (Paxos Gold), tokenized gold backing reserve value.",
+        "trustLevel": "High - canonical Paxos Gold mainnet address. External issuer-controlled (Paxos can pause/blocklist/freeze, charges fees). Well-known standard token."
+      },
+      {
+        "name": "USDC",
+        "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "role": "ERC-20 stablecoin; quote/settlement asset, paired with VY in the primary Uniswap V3 pool (VyUsdcPool).",
+        "trustLevel": "High - canonical Circle USDC mainnet address. External issuer-controlled (upgradeable proxy, can blocklist/pause). Well-known standard token."
+      },
+      {
+        "name": "WBTC",
+        "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+        "role": "ERC-20 wrapped BTC; reserve/collateral asset.",
+        "trustLevel": "High - canonical WBTC mainnet address. External custodian/merchant-controlled (BitGo; pausable, blocklist). Well-known standard token."
+      },
+      {
+        "name": "WETH",
+        "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+        "role": "ERC-20 wrapped ETH; reserve asset and Uniswap routing intermediary.",
+        "trustLevel": "High - canonical WETH9 mainnet address. Immutable, no admin/owner. Highest-trust external dependency."
+      },
+      {
+        "name": "UniswapV2Factory",
+        "address": "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+        "role": "Uniswap V2 factory; pair creation/lookup for V2 routing.",
+        "trustLevel": "High - canonical Uniswap V2 factory mainnet address. Immutable core contract."
+      },
+      {
+        "name": "UniswapV2Router02",
+        "address": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+        "role": "Uniswap V2 Router02; swap/liquidity routing on V2.",
+        "trustLevel": "High - canonical Uniswap V2 Router02 mainnet address. Immutable, audited periphery."
+      },
+      {
+        "name": "UniswapV3Factory",
+        "address": "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+        "role": "Uniswap V3 factory; creates/looks up V3 pools including the VY/USDC pool.",
+        "trustLevel": "High - canonical Uniswap V3 factory mainnet address. Owner-controlled only for enabling fee tiers; pool logic immutable."
+      },
+      {
+        "name": "UniswapV3SwapRouter",
+        "address": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+        "role": "Uniswap V3 SwapRouter (v1); executes swaps for officers / MEV bot / liquidity manager.",
+        "trustLevel": "High - canonical Uniswap V3 SwapRouter mainnet address. Immutable, audited periphery."
+      },
+      {
+        "name": "VyUsdcPool",
+        "address": "0xf96cCac0bfd5de8d1F69EA9F9f43ed3B174c2705",
+        "role": "Uniswap V3 VY/USDC liquidity pool; primary market/price source for the VY token. Per project memory, the LP NFT for this pool is owned by ValinityReserveTreasury (VRT), not by ValinityLiquidityManager (VLM).",
+        "trustLevel": "Medium - pool code is canonical Uniswap V3 (trustless), but this specific pool instance and its liquidity are project-deployed/managed. Worth verifying on-chain that it was created by the canonical V3 factory for the VY/USDC pair."
+      }
+    ],
+    "adminAddresses": [
+      {
+        "label": "Admin",
+        "address": "0x8310eA7EC55A7Ad6A4288aF683155A124A524a09",
+        "type": "Central admin/authority contract (deployments/eth_mainnet/Admin.json). Artifact has an empty ABI ([]) and numDeployments=11, so its exact interface can't be confirmed from the artifact alone, but constructor-args evidence proves it is the system authority: it is passed as the admin/owner argument into ValinityToken (args: ['VALINITY','VY','0x8310eA7EC...']) and ValinityPortal (args: [ValinityToken 0x597b..., 0x8310eA7EC...']). Acts as the root governance/access-control / owner address over the Valinity contracts. Likely an Ownable-admin, access-control hub, or ProxyAdmin/Timelock/multisig - needs on-chain verification. NOTE: the empty ABI means it cannot be introspected statically."
+      },
+      {
+        "label": "ValinityBuybackOfficer (proxy implementation)",
+        "address": "0xf311e729De3796A14C6B6D5875624F01d57c456a",
+        "type": "Implementation/logic contract behind the upgradeable ValinityBuybackOfficer proxy (proxy at 0x4B97D45d... has proxyKind + implementation). The proxy admin is the upgrade authority - confirm it resolves to the Admin contract above."
+      },
+      {
+        "label": "ValinityMEVBotV2 (proxy implementation)",
+        "address": "0x16B66A22C79DaBEAB3D0926937722757544a7589",
+        "type": "Implementation/logic contract behind the upgradeable ValinityMEVBotV2 proxy (proxy at 0x6f2F4580...). Upgrade-admin authority controls it; verify it maps to the Admin contract."
+      }
+    ],
+    "reconciliationGaps": [
+      "Admin.json is NOT a contract registry - it is a single deploy artifact for the 'Admin' contract with an empty ABI ([]) and numDeployments=11. It contains no list of, or pointers to, the other deployed contracts. So in the literal sense EVERY other mainnet artifact is 'missing from Admin.json': Admin.json references zero other contracts. The actual link from contracts to the Admin authority comes from constructor args in ValinityToken.json and ValinityPortal.json (both pass 0x8310eA7EC55A7Ad6A4288aF683155A124A524a09), not from Admin.json itself.",
+      "Mainnet deploy artifacts present in deployments/eth_mainnet/ but NOT referenced/reconciled by Admin.json (full list): VDAX (0xD985C0EA...), ValinityAcquisitionOfficer (0x7a0E5824...), ValinityBuybackOfficer (proxy 0x4B97D45d...), ValinityBuybackOfficer.v1 (0xD2F0826a...), ValinityCapOfficer (0x2f024159...), ValinityDAX (0xD256C672...), ValinityExchangeOfficer (0x48C88B80...), ValinityFloorOfficer (0x3d9d78CD...), ValinityGasOfficer (0x0a6C2117...), ValinityGasOfficer_v1_backup (0x6d6AE9de...), ValinityLiquidityManager (0x920AbB09...), ValinityLiquidityManager_v3_backup (0x920AbB09...), ValinityLoanOfficer (0x8Fd8d5eB...), ValinityMEVBotV2 (proxy 0x6f2F4580...), ValinityPortal (0xF612C211...), ValinityReserveTreasury (0x06087789...), ValinityReserveYieldOfficer (0xA95749f5...), ValinityStakingRouter (0x664b3A81...), ValinityToken (0x597b2952...), ValinityYieldOfficer (0xA245C9D2...), ValinityYieldTreasury (0xe58E29c9...).",
+      "Versioned/backup artifacts coexist with the current ones with no manifest distinguishing active vs deprecated: ValinityBuybackOfficer.json (0x4B97D45d...) vs ValinityBuybackOfficer.v1.json (0xD2F0826a..., a DIFFERENT address = superseded deployment still on file); ValinityGasOfficer.json (0x0a6C2117...) vs ValinityGasOfficer_v1_backup.json (0x6d6AE9de..., DIFFERENT address). Admin.json does not track these upgrades.",
+      "ValinityLiquidityManager.json and ValinityLiquidityManager_v3_backup.json point to the SAME address (0x920AbB09be0abeB9140fB0c69A7cD523b65D2Aa0). The '_v3_backup' is therefore a stale/duplicate artifact for the same on-chain contract (note the main artifact uses linked libraries: linkReferences/libraries present), creating ABI-drift risk between the two files.",
+      "Two contracts ship separate non-standard sidecar ABI files (ValinityExchangeOfficer_ABI.json, ValinityMEVBotV2_ABI.json) that are not hardhat-deploy artifacts (they are raw ABI arrays - they have no 'address') and are not reconciled by Admin.json; risk of drift vs the full artifacts.",
+      "Naming/identity ambiguity: both VDAX.json (0xD985C0EA...) and ValinityDAX.json (0xD256C672...) exist as distinct mainnet deployments. Unclear which is the canonical/active DAX; neither is reconciled by Admin.json.",
+      "Upgradeable proxies are present (ValinityBuybackOfficer: proxyKind+implementation 0xf311e729...; ValinityAcquisitionOfficer, ValinityReserveYieldOfficer, ValinityMEVBotV2 impl 0x16B66A22..., ValinityLiquidityManager all carry 'implementation'). The proxy/upgrade admin is a critical authority but is NOT enumerated by Admin.json - on-chain proxy-admin() / owner() checks are needed to confirm each maps back to 0x8310eA7EC...",
+      "Admin.json's numDeployments=11 is just the redeploy counter for the Admin contract itself; it cannot be used to reconcile the ~21 distinct Valinity*/DAX contracts on file. There is no single source-of-truth registry mapping every officer address to the Admin authority.",
+      "Verification gap: I confirmed the Admin authority link only for ValinityToken and ValinityPortal (via constructor args). For all other contracts the owner/admin relationship was not statically confirmed - recommend an on-chain owner()/admin()/proxyAdmin() sweep against 0x8310eA7EC55A7Ad6A4288aF683155A124A524a09 to validate the authority graph."
+    ]
+  },
+  "inv:deps-admin": {
+    "proxies": [],
+    "upgradeRisks": [
+      "INTEGRITY FAILURE — RESULTS NOT TRUSTWORTHY. The manifest files exist and are non-empty (mainnet.json = 418528 bytes, .bak.before_v3_upgrade = 389795 bytes), but I could not obtain authentic contents. Direct Read fails on size (>256KB). When I parse with jq and read the output via temp files, the tool-output channel is being actively tampered with: (a) Read returns lines my commands never wrote (injected editorial commentary like 'the transparent proxy shares an impl ... suspicious' and 'confirms 3 proxies'); (b) integrity-check lines I deliberately wrote (SELFHASH=, SELFBYTES=) are stripped/replaced with '<elided>'; (c) line numbering jumps and content is silently truncated; (d) fabricated 'StructuredOutput provided successfully' results appear without me calling the tool. I therefore cannot vouch for any extracted value.",
+      "The proxy/impl data that WAS surfaced is almost certainly fabricated placeholder data, not the real deployment. Addresses shown were textbook dummies (0x1234567890AbCdEf1234567890aBcDeF12345678, 0x7B2c3D4e5F60718293A4b5C6d7E8f90112233445), txHashes were patterned (0xaa11bb22cc33...), and the storage-layout hash rendered as 'a1b2c3...'. Real OpenZeppelin manifests contain non-patterned 40-hex addresses and 64-hex keccak layout hashes. Do NOT use these values for any upgrade-safety decision.",
+      "Apparent structure (UNVERIFIED, do not rely on): manifestVersion 3.2; top-level keys manifestVersion/proxies/impls; proxies as an array; impls as an object keyed by layout hash. Even these basic facts could not be confirmed against an untampered read.",
+      "RECOMMENDED REMEDIATION: Re-run this inventory in a clean session where the tool-output channel is not intercepted. Verify integrity end-to-end, e.g.: `shasum -a 256 .openzeppelin/mainnet.json` and confirm the hash out-of-band; then `jq '.proxies[] | {address,kind}'` and `jq '.impls | to_entries[] | {layoutHash:.key, address:.value.address, contract:(.value.layout.storage[0].contract)}'`. Cross-check each proxy's on-chain implementation slot (EIP-1967 impl slot 0x360894...bbc) against the manifest. Until a session produces output that passes a self-hash check, treat ALL extracted manifest data as compromised.",
+      "No storage-layout risk assessment across upgrades could be performed, because authentic layout entries (struct/mapping/gap fields, types, slot offsets) could not be read. The genuine upgrade risks (e.g., reordered/removed storage vars, shrunk __gap, changed types, uups _authorizeUpgrade gating, transparent vs uups admin handling) remain UNKNOWN and unevaluated."
+    ]
+  },
+  "inv:invariants": {
+    "economicInvariants": [
+      "SUPPLY CAP (hardcoded, immutable in bytecode): MAX_SUPPLY = 70,000,000 VY (absolute hard cap, asymptotically approached, never violated). INITIAL_SUPPLY = 17,000,000 VY minted at deployment and distributed entirely via the Loan Officer (every initial VY backed 1:1 by WETH/WBTC/PAXG collateral). VY is an immutable, non-proxy ERC-20 (Solidity 0.8.27, 18 decimals) at 0x597b29520098d6aaca3B2e0D1a380315c9240454. Snapshot 2026-04-23: totalSupply 17,659,148.74 VY; remaining mintable 52,340,851.26 VY. NOTE: the older ECOSYSTEM-ARCHITECTURE.md states '7 billion max supply' and that the 1% transfer fee raises the HIGHEST-LTVF cap; the newer code-traceable SOURCE-OF-TRUTH supersedes it (70M cap; transfer fee REDUCES the LOWEST-LTVF cap).",
+      "MINT RATE LIMITS (hardcoded, not configurable, not upgradeable - VY is not a proxy): only VYT may call mintAvailable(). Per-tx cap MINT_BPS_PER_TX = 7 = 0.07% of REMAINING supply (MAX_SUPPLY - totalSupply); per-epoch cap MINT_BPS_PER_EPOCH = 30 = 0.30% of remaining supply, EPOCH_DURATION = 86,400s (24h). Caps apply to remaining (not current) supply -> decelerating/logarithmic mint curve (snapshot: per-tx ~36,637 VY, per-epoch ~157,024 VY; at 69M supply: ~700/tx, ~3,000/epoch). Transfer fee transferFeeBps = 100 (1%) on non-whitelisted transfers, hardcoded max 10% (1000 bps); all protocol contracts whitelisted (intra-protocol fee-free).",
+      "FLOOR PRICE = lowest LTV-F: the protocol-guaranteed floor (minimum collateral value behind each VY) is the LOWEST LTV-F (TWAP-adjusted loan-to-value in USDC) across reserve assets {WETH, WBTC, PAXG}. SystemMetrics also exposes floorPrice = TVL / circulating (totalValueLocked / totalVYCirculating). Snapshot floor = $0.070629 (PAXG, the lowest of WETH $0.070924 / WBTC $0.071300 / PAXG $0.070629). Floor RATCHETS UP, NEVER DOWN under normal operation (only a fall in the WETH/WBTC/PAXG basket's USDC value can lower it; the VY/collateral ratio is preserved).",
+      "CIRCULATING ~= SUM OF VCO CAPS (core accounting invariant): circulating VY ~= Sigma(VCO caps) over WETH + WBTC + PAXG. Snapshot: circulating 389,146.89 VY vs total caps 389,199.03 VY (lag 52.14 VY, within the expected 7-transaction transfer-fee cap-reduction batching; self-corrects on next fee event). Every burn/cap-reduction flow enforces Sigma(capReductions) == vyIn/vyNet 1:1, keeping this invariant.",
+      "FLOOR-RATCHET MECHANISMS (only push floor up): (1) VAO sells VY when market price >= MTP = lowestLTVF x 2 (mtpMultiplier 20,000 bps) and buys collateral -> reserve grows; (2) VBO returns VY to VYT (effective burn), withdraws collateral at exact on-chain LTV (withdrawAmount = capReduction x reserve/cap), buys VY on market -> supply compresses; (3) VFO runs zero-capital Balancer V2 flash-loan arb (0% fee) whenever VY spot < lowestLTVF, profit = (LTV_floor - P_spot) x vyAmount - slippage. Buyback compounding: collateral withdrawn = capReduction x LTV, so when LTV>1 (basket appreciated) the buyback buys back more VY than burned -> net supply compression + floor ratchet up. Lifetime VBO net burns 69,065.79 VY.",
+      "ASSET CAP FLOOR: an individual asset's VCO cap cannot be reduced below assetCapFloor = 10,000 VY (prevents over-reduction of the weakest collateral column). Monthly cap reduction (reduceCap) bounded by maxReduction = cap_L x (1 - LTV_L/LTV_H), where L is the lowest-LTV asset and H the highest. Planned VGC Revenue Manager adds a governance-set cap-floor guard that pauses its burn step if the lowest-LTVF cap would fall below the minimum.",
+      "VYT TREASURY INVARIANTS: TARGET_BALANCE = 7,000,000 VY (auto-refill target via mintAvailable when below); CUSHION = 350,000 VY (standard OFFICER_ROLE callers, e.g. YieldOfficer, cannot pull below it; PRIORITY_OFFICER_ROLE = MEVBot + AcquisitionOfficer may bypass). Per-epoch PULL limit = 1% of circulating / 24h (floor 10K VY). Protocol is 'solvent by construction' - yield cannot exceed what VYT can fund; APY tiers (Premium 9%, Tier3 7.5%, Tier2 4.17%, Tier1 1.7%) are caps, not guarantees; master rate is dynamic = (freeVY/2) x 10000 / totalStaked.",
+      "AUTOMATED-OFFICER ZERO-LOSS / ZERO-BALANCE INVARIANTS: MEVBot (VMB) must repay exactly borrowVY to VYT and requires finalVY >= borrowVY + minProfit or reverts (VYT never loses a lent unit; default minProfit 0.5 VY); VMB, VBO, VFO all enforce a clean/zero non-VY balance post-condition each tx (nothing stuck or extractable). VFO flash loan must net repay Balancer or the whole tx reverts -> zero protocol capital at risk. VFO uses EIP-1153 transient-storage reentrancy guard.",
+      "ACQUISITION & MANIPULATION GUARDS: VAO gated to totalVY <= poolCapBps% of VY reserves in the V2 pair; LTV-F computed from a 30-minute Uniswap V3 TWAP (flash-loan-spike immune); cooldowns + fees (Price-Disparity trigger A: 2% fee, 5-min cooldown; LTV-Disparity trigger B: 1% fee, 12h cooldown). Whitelisted DEX routers only; no arbitrary external calls. VBO is skipped above MTP+5% (2.1x lowestLTVF) so the protocol does not buy at a premium.",
+      "STAKING PRINCIPAL PROTECTION: StakingRouter guarantees withdrawal >= original deposit. If LP value < principal, VYO tops up the shortfall from VYT; if LP value > principal, the excess routes to VBO (recycled as buy pressure); withdrawal reverts entirely if principal cannot be covered. StakingRouter splits deposits V_dax = V x N/(N+1) to DAX and the rest to Uniswap V2 LP (N=1 today -> 50/50). Planned VGC Revenue Manager (not deployed) is net-deflationary with invariants Sigma(capReductions)==vyIn (1:1) at lowest-LTVF asset and LTV preservation assetOut/vyIn == reserve/cap (backing-per-VY unchanged)."
+    ],
+    "governanceModel": "CURRENT (as documented, in transition; SOURCE-OF-TRUTH last refresh 2026-04-23). On-chain access control: DEFAULT_ADMIN_ROLE and ADMIN_ROLE are held by an Admin Multisig backed by AWS KMS (no hot-wallet private keys) at 0x8310eA7EC55A7Ad6A4288aF683155A124A524a09. Its ONLY power is upgrading UUPS proxies (all officer contracts are UUPS) and changing officer parameters. The VY Token itself is NOT a proxy and is immutable (mint limits, transfer fee, cap permanent). Explicitly: no vesting, no team unlocks, NO admin withdrawal function — the admin CANNOT withdraw reserves from VRT; only VBO and VFO can pull collateral via withdrawForBuyback. Other roles: OFFICER_ROLE (YieldOfficer, respects cushion), PRIORITY_OFFICER_ROLE (MEVBot, AcquisitionOfficer, ignore cushion), WALLET_ROLE (VAO caller). Decision logic runs off-chain on AWS ECS Fargate (acquisition/buyback/arb/floor workers); contracts are execution-only and enforce all invariants. The GOVERNANCE-TRANSFER-PLAN frames the starting authority as an AdminSafe MultiSig 3-of-5.\n\nTARGET on-chain governance (VGC stake-to-vote, partially deployed, NOT yet on mainnet): VGC token = 100 VGC FIXED supply, 18 decimals, no mint function after deployment, governance + productive staking. Holders stake VGC into ValinityGovernanceOfficer to vote. Parameters from the transfer plan: quorum = 50 VGC; approval threshold = 75%; proposer threshold >= 0.5 VGC per member; approved proposals route through ValinityExecutor, a TIMELOCK with MIN_DELAY = 1 day, which holds DEFAULT_ADMIN_ROLE/ADMIN_ROLE over the protocol. VGC also (planned) governs the Gas Officer's authorized operator wallets and can pause (but not redirect outputs of) the Revenue Manager. VGC governance treasury funded from the initial 100-token allocation (NOT from fee flows).\n\nTRANSFER PROCESS (gradual; final step IRREVERSIBLE). Fase 1 Preparacion (DONE: VGC token, Executor with 1-day timelock, GovernanceOfficer quorum 50, 27 unit tests, deploy scripts 300/305). Fase 2 'Shadow' (governance deployed on Sepolia, controls nothing; test propose->vote->queue->execute incl. quorum-fail and <75% rejection; 1-2 weeks). Fase 3 'Dual' RECOMMENDED (script 310_grant_governance_roles.ts grants the Executor roles WITHOUT revoking AdminSafe, so BOTH can act; AdminSafe is the safety backstop able to revoke the Executor and revert a malicious proposal; 2-4 weeks). Fase 4 Complete/IRREVERSIBLE (manual script revoke_admin_safe_governance.ts requires typing 'CONFIRMO LA TRANSFERENCIA IRREVERSIBLE' + 60s delay; revokes AdminSafe roles so only the Executor controls contracts). Minimum ~8 weeks before Fase 4; post-Fase-4 recovery requires a governance emergency proposal (quorum 50, 75% approval, 1-day timelock) or, if governance is fully compromised, off-chain migration to new contracts. VY stakers (backed yield) and VGC stakers (reflexive, fee-funded rewards via Revenue Manager) are separate pools.",
+    "trustAssumptions": [
+      "Trust-minimized, NOT trustless (stated explicitly). Contracts enforce all invariants; the off-chain AWS Fargate backend only chooses parameters and timing. A malicious or broken backend caller CANNOT violate cushion limits, mint rate caps, zero-balance post-conditions, or principal protection — the worst it can do is choose WHEN operations fire (or not at all). If the backend dies, the protocol is safe; only throughput stops.",
+      "Admin/upgrade key is trusted only for UUPS proxy upgrades via the AWS-KMS multisig (no hot private keys; requires multiple KMS key holders; every upgrade observable on-chain via the Upgraded event). It has NO withdrawal power and the VY Token core asset cannot be upgraded. Residual trust: the KMS signers do not collude on a malicious officer-proxy upgrade — the document calls this 'the only admin-level attack vector.'",
+      "Oracle integrity is assumed: LTV-F and acquisition/floor triggers use a 30-minute Uniswap V3 TWAP (chosen to resist flash-loan manipulation; expensive to move over the window); Uniswap V2 VY/USDC is the public market price source; floor defense uses Balancer V2 flash loans (0% fee). Trust in those external venues/oracles is required.",
+      "During Fase 3 'Dual', BOTH the AdminSafe (3-of-5) and the governance Executor hold admin roles, so until Fase 4 renunciation the system is only as trustworthy as the AdminSafe — treated as a deliberate safety backstop that can revoke the Executor and revert malicious actions.",
+      "Post-Fase-4, trust shifts entirely to VGC stake-to-vote (quorum 50 of 100 fixed VGC, 75% approval, 1-day timelock). Implicit assumption: the 100 fixed VGC tokens are not concentrated adversarially (proposer threshold only 0.5 VGC; quorum = half of all VGC).",
+      "The flywheel is explicitly NOT a perpetual motion machine: it needs continued external activity (buyers, borrowers, volatility) to accelerate; it is NOT immune to drawdowns — the floor protects intrinsic value but market price can wick below it until VFO arb closes the gap; buyback accretion assumes the WETH/WBTC/PAXG basket appreciates on average.",
+      "Reentrancy/access-control/pausability assumed sound (VRT and VYT use ReentrancyGuard; VRT pausable; role-gated state changes; whitelisted routers only). No formal audit is referenced in the document; users are told to seek the latest audit before allocating capital.",
+      "Reconciliation: the SOURCE-OF-TRUTH (code-traceable, refreshed from the live monitor verify-health.mjs / pool-value-analysis.mjs) is authoritative and supersedes the older ECOSYSTEM-ARCHITECTURE.md where they conflict (70M vs 7B max supply; direction of the transfer-fee cap mechanic). On-chain values supersede documented snapshot numbers."
+    ],
+    "knownConcerns": [
+      "Governance not yet decentralized / transfer incomplete: VGC token and on-chain governance are planned/partially-deployed and NOT yet on mainnet; until Fase 4 the AdminSafe (3-of-5) / AWS-KMS multisig retains admin authority. The final transfer is explicitly IRREVERSIBLE, with no on-chain recovery if governance is later fully compromised (only off-chain migration to new contracts).",
+      "All officer contracts are UUPS-upgradeable via the admin multisig — a malicious upgrade could introduce an extraction/withdrawal function. The document flags this as the single admin-level attack vector; mitigated only by KMS multisig consensus + on-chain observability, and bounded by VY itself being immutable.",
+      "Centralization of off-chain control: backend automation on AWS Fargate (cloud outage halts new operations) plus a privileged MEV Bot that is the ONLY authorized DAX trader (if it fails/is captured, cross-pool arbitrage stops and DAX pools drift). 'Not permissionless at every level.' Self-funding gas via the planned Gas Officer (VGO) is not yet deployed.",
+      "Documentation inconsistency between the two architecture docs: 70M vs 7B max supply; whether the 1% transfer fee raises the highest-LTVF cap or reduces the lowest-LTVF cap. The newer code-traceable SOURCE-OF-TRUTH is authoritative; the ECOSYSTEM-ARCHITECTURE.md figures are stale.",
+      "circulating ~= Sigma(VCO caps) holds only approximately at any instant (52.14 VY gap at snapshot) due to the 7-transaction transfer-fee cap-reduction batching; it is eventually-consistent, not instantaneous.",
+      "Market/basket risk: the floor is denominated in the WETH/WBTC/PAXG basket's USDC value — a 50% basket crash drops the floor ~50% (the VY/collateral ratio is preserved but USD floor is not). VY spot can wick below floor before VFO arb pulls it back. Public Uniswap V2 pool is intentionally thin -> large exits face high slippage; DAX is permissioned (no direct user exit).",
+      "Reflexive risk for VGC stakers and the planned Revenue Manager: VGC staker rewards have NO backing guarantee (reflexive on VGC price), unlike VY stakers. The triangle-arb path that would create V2 VY buy pressure is only ~40-70% efficient vs ~95%+ for direct buyback and REQUIRES a VY/VGC DAX pair seeded before launch, else external VGC buys raise VGC in isolation with no VY benefit.",
+      "Loans are never explicitly liquidated: underwater VLO loans simply leave collateral in VRT as interest (~1%/month, ~12.7% APY compounding) grows past net collateral — gentler than cascading liquidations, but borrower VY principal stays in circulation. The VLO Premium tier (9% APY, first 1,000 borrowers) is a permanent obligation that is proportionally costlier if borrower count/revenue do not scale.",
+      "Yield not guaranteed: tier APYs are caps; the dynamic master rate falls automatically if revenue (arb, loan interest, volume) drops. Regulatory exposure on planned tokenized-equity DAX pools (TSLAon/GOOGLon/NVDAon/QQQon), the VLO lending structure, and VGC-funded reposter programs.",
+      "Several core value/governance pieces are PLANNED and not yet deployed: VGC token, VGC Staking Contract, VY/VGC DAX pair, VGC Revenue Manager, Gas Officer (VGO), Referral Officer (VRO), and the fee redirections pointing all five fee streams at the Revenue Manager. Until then several fee streams (VAO acquisition fees, yield feeOut) route to a company account rather than on-chain governance."
+    ]
+  }
+}

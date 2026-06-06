@@ -1,0 +1,43 @@
+{
+  "contract": "ValinityGovernanceCommittee (VGC) — governance + keeper-funding token (the VGO's minted reward token)",
+  "address": "0xe595309a6c0119b0690063A91c5572851A662c67",
+  "deployment": "NON-PROXY, NON-UPGRADEABLE (plain ERC20 + ERC20Permit, constructor-based; EIP-1967 impl slot EMPTY). Logic permanently FROZEN. numDeployments=1.",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality via build-info (gold standard)",
+    "liveMetadataIpfs": "12200f327310753517934f11a8bd58f1abc89591e8fcdd915f6024ea38e3e4797a41",
+    "buildInfo": "artifacts/build-info/32bd69ca36ec18b666f48a894e8f8758.json — compiled ValinityGovernanceCommittee.deployedBytecode metadata IPFS == live (EXACT).",
+    "asDeployedSourceKeccak": "0x80d4213d19ea48d5a8540022c90305229c5a25e178a46a481712923b84ee0798",
+    "matchedSource": "WORKSPACE contracts/governance/ValinityGovernanceCommittee.sol (DIRTY/uncommitted, 257ln) == build-info embedded source byte-identical. git HEAD 95fc373 + edits; deployed from uncommitted workspace.",
+    "solc": "0.8.27+commit.40a35a09 (native)",
+    "optimizer": { "enabled": true, "runs": 100 },
+    "evmVersion": "cancun",
+    "note": "5218 runtime bytes. Conclusion: workspace == as-deployed == live."
+  },
+  "whatItIs": "Plain ERC20 + ERC20Permit (EIP-2612), 18 decimals, NO transfer fee / NO burn (burn omitted deliberately — would let supply shrink to cheapen governance bps-of-supply thresholds). Dual role: governance token + keeper-funding token (the VGO is its sole minter, rewarding keepers). Credibly-fixed monetary policy (all schedule numbers are constants; changing them = redeploy).",
+  "monetaryPolicy": {
+    "INITIAL_SUPPLY": "1,000,000e18 minted to `treasury` at construction (seeds the VARO launch)",
+    "MAX_SUPPLY": "7,000,000e18 (hard cap, asymptotically approached, NEVER reached)",
+    "MINT_EPOCH": "7 days",
+    "MAX_EPOCH_MINT_BPS": "25 (0.25%/week of the unminted supply) — IMMUTABLE cap on the ceiling -> emission can only be slowed/halted, never accelerated past the ~8-year-to-70% schedule",
+    "epochMintBps": "admin-settable, <= MAX_EPOCH_MINT_BPS, 0 = halt (kill switch); starts at 25",
+    "ceiling": "each epoch the minter may mint at most epochMintBps of (MAX_SUPPLY - totalSupply()) snapshotted at the epoch start (geometric on unminted supply); both unminted AND bps frozen at epoch start (mid-epoch setEpochMintBps only takes effect next epoch)"
+  },
+  "trustModel": "Sole `minter` (the VGO), set ONCE via setMinter -> minterLocked forever (irreversible). `admin` (two-step transfer -> governance Executor) sets the minter once + tunes/halts the ceiling. Admin CANNOT mint, change the minter after lock, or move balances. No admin mint, no burn, no balance-move, no upgrade.",
+  "liveConfig": {
+    "name/symbol/decimals": "Valinity Governance Committee / VGC / 18",
+    "totalSupply": "1,000,000 VGC (only the INITIAL_SUPPLY seed — no epoch minting has occurred)",
+    "minter": "0x0 (NOT SET) ; minterLocked = false",
+    "epochMintBps": "25 (max)",
+    "epoch": "{start:0, bps:0, minted:0, unminted:0} (never minted via the epoch path)",
+    "admin": "0x8310eA7E (KMS) ; pendingAdmin = 0",
+    "initialSupplyHolder": "0x8310eA7E (the constructor `treasury` arg = the KMS itself holds the 1,000,000 VGC seed)",
+    "dormancy": "DOUBLY-DORMANT keeper-reward path: VGC.minter=0 (no epoch emission possible) AND VGO.vgc=0 (VGO not wired). Activation = VGC.setMinter(VGO) [one-time lock] + VGO.wireVgc(VGC)."
+  },
+  "audit": {
+    "workflow": "w5mu2e3r7 (73 agents, 4 survived / 61 refuted) — 7 dimensions. NO Critical/High/Medium code findings.",
+    "verdict": "Emission provably bounded — sound cap + kill-switch. Per-epoch ceiling <= epochMintBps (<=0.25%/wk) of unminted supply (frozen at epoch start); totalSupply STRICTLY < MAX_SUPPLY forever (induction: bps<10000 => each epoch adds < remaining; MAX_SUPPLY-totalSupply never underflows); skipping epochs does NOT compound; uint96 packing safe (cap<=1.75e22, supply<=7e24 << uint96 max); getMintAllowance() EXACTLY mirrors mint(); epochMintBps=0 halts; mid-epoch setEpochMintBps only effective next epoch (admin can't accelerate). Stock OZ ERC20+Permit: no fee/burn/hook (mint to can't reenter)/pausable/blacklist/rebase; EIP-2612 OZ-default. Sole minter one-time-locked; admin can ONLY slow/halt (never mint/move/accelerate/upgrade). NON-PROXY immutable.",
+    "findings": "All Low/operational (immutable contract, minter UNSET/dormant live): L1 activation-window admin risk (while minter unset, compromised admin could setMinter(malicious) -> bounded ~17.5k VGC/wk, irreversible once locked; extinguished by setMinter(audited VGO)). L2 admin halt epochMintBps=0 (intended kill-switch; ~7-day latency since the active ceiling reads the frozen e.bps). L3 transferAdmin lacks zero-address check (reversible ops nit; acceptAdmin rejects zero). L4 1M INITIAL_SUPPLY at KMS EOA = 100% of current supply / ~14% of MAX (governance-centralization at handoff; VGC is also the vote token).",
+    "handoff": "(1) one-time setMinter(VGO 0x0a6C2117) from a trusted admin -> point at the AUDITED VGO; pair with VGO.wireVgc(VGC); irreversible. (2) keep epochMintBps sane (<=25; 0=halt). (3) migrate admin -> governance Executor (two-step; low blast radius). (4) decide the 1M seed disposition. No upgrade lever (immutable)."
+  },
+  "validatesVgoDependency": "This audit confirms VGO-M2: VGC DOES correctly implement the per-epoch emission ceiling + sole-minter lock + 0=halt kill-switch that the VGO keeper-reward audit depends on."
+}

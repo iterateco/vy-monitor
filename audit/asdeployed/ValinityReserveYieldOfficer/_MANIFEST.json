@@ -1,0 +1,16 @@
+{
+  "contract": "ValinityReserveYieldOfficer (VRYO)",
+  "proxy": "0xA95749f52031dA2c4baB7cf38323B69A9E3415d3",
+  "impl": "0x89f256f0035dea79584cbbdec4036dfd5e1fa2b3",
+  "source_proof": {
+    "commit": "c4bfc30",
+    "file": "ValinityReserveYieldOfficer.sol",
+    "metaIpfs": "0c18431c605d417ea124859855c5131c68c475505306ef8eaaea529194db1f14",
+    "metaStrippedBytes": 18110,
+    "note": "artifact.deployedBytecode+metadata == live (bytediff MATCH, only 2 UUPS immutables differ). BUT recorded solcInputHash a50f3f1a is STALE (recompiles to d3752a6a, NOT live) — VAO-style pointer bug; do not trust it. Workspace a89611b is AHEAD (compiles to fff08e0f), not yet deployed."
+  },
+  "inlined_library": "V3ZapMath (compiled into VRYO, not externally linked)",
+  "solc": "0.8.27+commit.40a35a09",
+  "method": "metadata-IPFS-hash equality: c4bfc30 source recompiled within a89611b build-info closure == live impl metadata",
+  "verified_date": "2026-06-02"
+}

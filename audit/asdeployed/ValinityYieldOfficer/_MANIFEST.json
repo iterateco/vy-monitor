@@ -1,0 +1,54 @@
+{
+  "contract": "ValinityYieldOfficer (VYO)",
+  "proxy": "0xA245C9D2D375A317DbA3d18bC74BF5921E7892C9",
+  "liveImpl": "0x08a4de6b20fd8d3580b94991028a53d6a7ae1c92",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard)",
+    "liveMetadataIpfs": "1220e8c4be478355ea3e93bcdd0e5bc65a0a74c5eb67196f3d00e289438ad0624675",
+    "recompiledMetadataIpfs": "1220e8c4be478355ea3e93bcdd0e5bc65a0a74c5eb67196f3d00e289438ad0624675",
+    "match": true,
+    "sourceCommit": "WORKSPACE (uncommitted M edits) — NOT a committed commit; user redeployed from workspace without committing (same pattern as VLO). HEAD 0fb4122 does NOT match (122069b1…).",
+    "buildInfo": "21058a62662d5b8eba568ecece2c16a8.json",
+    "solc": "0.8.27+commit.40a35a09 (native)",
+    "optimizer": {
+      "enabled": true,
+      "runs": 100
+    },
+    "evmVersion": "cancun",
+    "note": "Workspace contracts/officer/ValinityYieldOfficer.sol had uncommitted modifications; THOSE modifications are the deployed source (metadata hash matches live exactly). The on-disk deployment json is a different compile. Closure repo files: [\"contracts/officer/ValinityYieldOfficer.sol\"]"
+  },
+  "audit": {
+    "workflow": "wf_b7bb0f6d-03a (resumed as w0ximbq0f after overnight infra stall); 63 agents, 5 survived all-Info/Low / 49 refuted",
+    "verdict": "CLOSED non-admin by physics; 0 permissionless-exploitable. VYO is a VY MINTER (VYT.OFFICER_ROLE=true). Mint bounded (9% cap, frozen maxGross snapshot, self-throttling rate), backed (every pull booked 1:1 into VCO = cap golden-rule increment), value-conserving (reservation conservation-neutral; clamps only bias rate DOWN).",
+    "vcoBooking": "CONFIRMED correct-by-design per project_vco_cap_golden_rule: addToHighestLTVFCap(pulled) = cap up by exactly the VY minted out of VYT (full 95%); un-minted 5% correctly not counted. Not a double-count.",
+    "adminTrust": "Dominant lever = _authorizeUpgrade @1285 (ADMIN_ROLE; an upgrade inherits the live VYT OFFICER_ROLE -> unbounded unbacked mint in 1 tx) > setRouter @666. Both DEFAULT_ADMIN + ADMIN held by 0x8310eA7E…4a09 -> must move to TimelockController + renounce.",
+    "crossContract": "VYT (getAvailableForYield honesty + cushion/headroom, ~12x live cover), VCO (the golden-rule conservation sink; immutable in VYO = strength), VARO (honest debt when wired), VSR (trusted router idempotency + user-leg no-sandwich)."
+  },
+  "closureExternal": [
+    "@openzeppelin/contracts/access/AccessControl.sol",
+    "@openzeppelin/contracts/access/IAccessControl.sol",
+    "@openzeppelin/contracts/interfaces/IERC1363.sol",
+    "@openzeppelin/contracts/interfaces/IERC165.sol",
+    "@openzeppelin/contracts/interfaces/IERC1967.sol",
+    "@openzeppelin/contracts/interfaces/IERC20.sol",
+    "@openzeppelin/contracts/interfaces/draft-IERC1822.sol",
+    "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol",
+    "@openzeppelin/contracts/proxy/beacon/IBeacon.sol",
+    "@openzeppelin/contracts/proxy/utils/Initializable.sol",
+    "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol",
+    "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+    "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+    "@openzeppelin/contracts/utils/Address.sol",
+    "@openzeppelin/contracts/utils/Context.sol",
+    "@openzeppelin/contracts/utils/Errors.sol",
+    "@openzeppelin/contracts/utils/LowLevelCall.sol",
+    "@openzeppelin/contracts/utils/Panic.sol",
+    "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol",
+    "@openzeppelin/contracts/utils/StorageSlot.sol",
+    "@openzeppelin/contracts/utils/TransientSlot.sol",
+    "@openzeppelin/contracts/utils/introspection/ERC165.sol",
+    "@openzeppelin/contracts/utils/introspection/IERC165.sol",
+    "@openzeppelin/contracts/utils/math/Math.sol",
+    "@openzeppelin/contracts/utils/math/SafeCast.sol"
+  ]
+}

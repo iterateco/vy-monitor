@@ -1,0 +1,11 @@
+{
+  "contract": "ValinityLoanOfficer",
+  "mainPath": "contracts/officer/ValinityLoanOfficer.sol",
+  "proxy": "0x8Fd8d5eB23f520D9BF8863364Ed44dbb29769DE4",
+  "liveImpl": "0xd72e3fb78209eea2df2820531e2beb4e2563a434",
+  "solc": "0.8.27",
+  "sourceBasis": "WORKSPACE contracts/officer/ValinityLoanOfficer.sol (1135 lines), PROVEN == live by Hardhat recompile",
+  "proof": "Recompiled with Hardhat solc 0.8.27 → metadata IPFS hash IDENTICAL to live impl (79ade5ae…); deployedBytecode identical to live except 2x20-byte UUPS __self immutable @4937/@5473. The deployment artifact (ValinityLoanOfficer.json) is an OLDER build (numDeployments:2, different metadata e0fb5e21…) — user redeployed latest VLO directly from workspace via another chat, bypassing the artifact pipeline.",
+  "guard": { "method": "Hardhat recompile metadata-hash match", "metadataHashMatchesLive": true, "byteDiffsAreImmutablesOnly": true },
+  "valinityClosure": ["contracts/officer/ValinityLoanOfficer.sol", "contracts/officer/ValinityCapOfficer.sol", "contracts/treasury/ValinityReserveTreasury.sol", "contracts/token/ValinityToken.sol", "contracts/token/IWETH.sol"]
+}
