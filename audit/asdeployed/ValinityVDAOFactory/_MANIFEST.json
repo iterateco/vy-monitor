@@ -1,0 +1,40 @@
+{
+  "contract": "ValinityVDAOFactory (UUPS) + ValinityVDAO (immutable CREATE2 token template) — the V-DAO subsystem",
+  "factoryProxy": "0x5C92f6Cd5280BFf0e32970fCAA0997c1E93a2B39",
+  "factoryImpl": "0x6a7a847ab26daec63ffd5dbe60b915248c0a1a28",
+  "tokenDeployment": "ValinityVDAO has NO standalone deployment — the factory CREATE2-deploys one immutable instance per T4 launch (salt = keccak256('VALINITY_VDAO', creator)). None launched yet (VDAO-DAX getNumPools=0, VARO dormant). Audited via the factory's embedded creationCode; source identity proven by the factory deployment's metadata.sources keccak256.",
+  "deployment": "Factory = UUPS proxy (EIP-1967 impl slot -> 0x6a7a847a; admin slot empty = UUPS). DEFAULT_ADMIN_ROLE-gated _authorizeUpgrade. numDeployments=1.",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (factory impl) + per-file source keccak256 (both files)",
+    "liveFactoryImplMetadataIpfs": "1220ebf3f814761157c68476ce788ea25b6ae46a4ec0100dc95acb77aa037343eb1f",
+    "match": "deployment json deployedBytecode metadata IPFS == LIVE factory impl (EXACT). deployment.metadata.sources keccak256 == workspace .sol for BOTH ValinityVDAOFactory.sol AND ValinityVDAO.sol.",
+    "asDeployedKeccak": {
+      "contracts/alliance/ValinityVDAOFactory.sol": "0x218623d9f0ba20ec67c7c7053eda9eda697218b88a00edccd7072ba3d9db5fbe (228 ln)",
+      "contracts/alliance/ValinityVDAO.sol": "0x0207092fa44711e0297c47995eaed368f12c2866b93a7b18336327f96855a6eb (191 ln)"
+    },
+    "git": "WORKSPACE is DIRTY (git M) — but the dirty workspace IS the as-deployed source: both files' workspace keccak256 == deployment metadata EXACTLY, while HEAD a85f449 does NOT (deployed from uncommitted edits, the VGO/VGC/VMB pattern). NOTE: VARO's .sol also shows M now (pending workspace edit) but the LIVE VARO impl 0xeC4B6401 is UNCHANGED = the audited bytecode -> the prior VARO audit still holds; re-audit only if VARO is redeployed.",
+    "solc": "0.8.27+commit.40a35a09",
+    "optimizer": { "enabled": true, "runs": 100 },
+    "evmVersion": "cancun",
+    "note": "factory impl 13443 B. Conclusion: workspace == as-deployed == live for the factory; the token template the factory will mint == the audited ValinityVDAO.sol."
+  },
+  "whatItIs": "ValinityVDAOFactory: the SOLE deployer + source-of-truth for V-DAO tokens at VARO T4. Owns layer name/symbol DERIVATION (previewNames), the FCFS name/symbol UNIQUENESS registry (nameTaken/symbolTaken), and the PERMANENT on-token wiring (veo + mainDax) baked into every minted V-DAO — owned here, never passed by VARO, so a buggy VARO can't bake wrong exemptions. UUPS-upgradeable (patches FUTURE launches; deployed tokens are frozen). launch + reserveName are VARO_ROLE-only. ValinityVDAO: a fully-immutable ERC20+Permit+Burnable creator token (no admin/owner/upgrade, constructor-only). Total minted = 2x activeSupply: activeSupply -> factory -> VARO (the tradeable half VARO runs the launch split on); activeSupply -> the token itself, LOCKED as a 1-year linear creator vest (claimVested, creator-only). 0.7% transfer fee BURNED on every non-exempt transfer; exempt set (frozen) = {factory, address(this), varo, veo, vdax(main DAX)}.",
+  "discharges": {
+    "VDAO-DAX-M3 (sender-side-FoT risk)": "DISCHARGED — the V-DAO fee is RECIPIENT-side: _update burns the fee OUT OF `value` (sender's balance drops by exactly `value`, recipient gets `value-fee`). So a non-exempt DEX sending a V-DAO out has its balance drop by exactly amountOut -> reserve stays in sync. The V-DAO is NOT a sender-side-FoT token.",
+    "DEX no-reentrancy assumption": "DISCHARGED — plain ERC20+Burnable+Permit; _update only calls super._update (no external calls / no ERC777 hooks / no callbacks).",
+    "main-DAX exemption": "CONFIRMED — mainDax is permanently feeExempt on every V-DAO (so the main DAX, which books requested amounts, never overcounts its V-DAO reserve). The VDAO-DAX is intentionally NOT exempt (balance-delta accounting makes the burn safe + deflationary)."
+  },
+  "liveConfig": {
+    "factoryAdmin": "DEFAULT_ADMIN_ROLE = KMS 0x8310eA7E",
+    "factoryVaroRole": "VARO_ROLE = VARO 0x514F0ABf (wired)",
+    "factoryWiring": "varo=0x514F0ABf (real VARO), veo=0x48C88B80 (real VEO), mainDax=0xD256C672 (real DAX) — all baked into future V-DAOs",
+    "dormancy": "No V-DAO launched yet (VARO dormant, VDAO-DAX getNumPools=0). Factory wired + ready; the first T4 launch / VGC bootstrap mints the first V-DAO."
+  },
+  "audit": {
+    "workflow": "wg9tl6qlr (12 agents, 5 dimension finders -> adversarial verify -> synthesis). 49 raw -> 3 survived / 3 refuted / 43 Low-Info. Tally: 1 Critical, 1 High, 1 Medium, 4 Low/Info. ZERO permissionless-exploitable.",
+    "verdict": "CLOSED / no fund leak. The 3 KEY PROPERTIES the DEX audits assumed are CONFIRMED in code: (1) RECIPIENT-SIDE fee -- _update burns the 0.7% out of `value` (super._update(from,0,fee) then super._update(from,to,value-fee)), so the sender's balance drops by EXACTLY `value` and the recipient gets value-fee; a non-exempt DEX sending amountOut therefore has its balance drop by exactly amountOut -> reserve stays in sync (DISCHARGES VDAO-DAX-M3 -- the V-DAO is NOT sender-side-FoT). (2) HOOK-FREE -- plain ERC20+Burnable+Permit; _update only calls super._update (no external calls / ERC777 callbacks) (DISCHARGES the DEX no-reentrancy assumption). (3) MAIN-DAX EXEMPT, VDAO-DAX NOT -- feeExempt={factory,address(this),varo,veo,vdax(mainDax)}; the VDAO-DAX is deliberately non-exempt (balance-delta accounting). Token fully immutable (no admin/owner/upgrade/setter). Supply: constructor mints EXACTLY 2x activeSupply (no other mint path), burns only shrink. Vesting: linear, capped at vestTotal, CEI-correct, creator-only, no over-claim, no reentrancy. Closed-circuit: only V-DAO exits = active half->VARO (launch caller), vest->immutable creator, fee->burn; no arbitrary recipient, no rescue/sweep; neither contract holds VY/USDC/asset.",
+    "findings": "C1 factory _authorizeUpgrade (DEFAULT_ADMIN, no timelock) controls how ALL FUTURE V-DAOs are minted (redirect active half / mint to attacker / rotate VARO / bake exemptions); deployed tokens immutable & unaffected; kept Critical for blast-radius consistency (workflow rated High). H1 setVeo/setMainDax weaponize the PERMANENT exempt wiring baked into future tokens (attacker router/DEX -> fee skim / reserve poisoning; irreversible per cohort; bumped to High per workflow). M1 creator vest = 50% of max supply over 1yr + ~10% launch cut (tokenomics; creator's own token + launcher's own seeded liquidity, NOT protocol VY/backing; transparent on-chain; buyer disclosure). Lows: L1 fee rounds to 0 for value<143 (dust); L2 layer previewNames external-calls parent.symbol() (operational; atomic-revert, NO permanent name-locking -- the 'permanent locking' over-claim was REFUTED, previewNames runs before the reserve); L3 setVaro rotation sequencing (varo starts 0; rotate carefully); L4 storage gap sizing on upgrades. Info: CREATE2 cannot be griefed (launch is VARO_ROLE-only, the only CREATE2 path).",
+    "refutations": "Workflow refuted 3 of 6 Crit/High/Med incl. the 'previewNames permanently locks names' claim (REFUTED -- previewNames runs before the name reservation, so any revert is atomic). All 3 KEY PROPERTIES verified true in code.",
+    "handoff": "Migrate the factory's DEFAULT_ADMIN_ROLE -> governance TimelockController + upgrade delay BEFORE VARO starts launching, then renounce EOA (C1+H1 -- the factory controls every future V-DAO). Confirm veo=0x48C88B80 / mainDax=0xD256C672 (verified live). Disclose the creator vest (50% of max/1yr) to V-DAO buyers (M1). Deployed ValinityVDAO tokens are immutable -- no handoff action. NOTE: live VARO impl 0xeC4B6401 UNCHANGED = audited (workspace VARO .sol shows pending M edit -> re-audit only on VARO redeploy)."
+  }
+}
