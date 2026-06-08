@@ -17,6 +17,19 @@ import networks from '../networks';
  */
 const COLLATERAL_SYMBOLS = new Set(['WETH', 'WBTC', 'PAXG']);
 
+/**
+ * Cap Health dust tolerance, in VY wei (1 VY = 1e18 wei).
+ * Total caps should equal circulating supply exactly, but integer-division
+ * truncation in cap accounting can leave a few wei of rounding dust (each cap
+ * mutation floors down by ≤1 wei). A strict `=== 0n` check flags that harmless
+ * dust as a 🔴 mismatch. We allow up to this many wei of |lag| before alerting.
+ *
+ * Kept deliberately tiny for safety: 1e3 wei = 1e-15 VY — 15 orders of magnitude
+ * below 1 VY, so any economically meaningful mismatch (sub-VY or larger) still
+ * trips the alert, while ~1000 single-wei truncations are absorbed.
+ */
+const CAP_HEALTH_DUST_WEI = 1_000n;
+
 const client = createPublicClient({
   chain: mainnet,
   transport: http(MAINNET_RPC_URL),
@@ -341,6 +354,95 @@ const fetchData = async () => {
       } else {
         daxErrors.push(`getPoolReserves(${i}): ${(r.error as Error).message ?? 'reverted'}`);
       }
+    }
+  }
+
+  // --- VDAO DAX (second arbitrage exchange contract) ---
+  // Unlike the original ValinityDAX (VY/asset pools), the VDAO DAX pairs a VDAO
+  // token (e.g. VGC, launched on top of VY) with an external asset (e.g. WBTC).
+  // getPoolReserves returns BOTH token addresses + reserves, and there is no
+  // VY-denominated total accessor.
+  const vdaoDaxConfig = getContractConfig('ValinityVdaoDAX', (addresses as Record<string, Address>)['VDAODAX']);
+  const vdaoDaxErrors: string[] = [];
+  const vdaoDaxBaseResults = await client.multicall({
+    contracts: [
+      { ...vdaoDaxConfig, functionName: 'getNumPools' },
+      { ...vdaoDaxConfig, functionName: 'swapsPaused' },
+    ],
+    allowFailure: true
+  });
+
+  const vdaoDaxGet = <T,>(idx: number, label: string, fallback: T): T => {
+    const r = vdaoDaxBaseResults[idx];
+    if (r.status === 'success') return r.result as T;
+    vdaoDaxErrors.push(`${label}: ${(r.error as Error).message ?? 'reverted'}`);
+    return fallback;
+  };
+
+  const vdaoNumPools = vdaoDaxGet(0, 'getNumPools', 0n);
+  const vdaoDaxSwapsPaused = vdaoDaxGet(1, 'swapsPaused', false);
+
+  const resolveToken = async (addr: Address): Promise<{ symbol: string; currency: Currency }> => {
+    const known = assets.find(a => a.address.toLowerCase() === addr.toLowerCase());
+    if (known) return { symbol: known.symbol, currency: known.currency! };
+    const info = await client.multicall({
+      contracts: [
+        { abi: abis.ERC20, address: addr, functionName: 'symbol' },
+        { abi: abis.ERC20, address: addr, functionName: 'decimals' },
+      ],
+      allowFailure: true
+    });
+    const symbol = info[0].status === 'success' ? info[0].result as string : addr.slice(0, 10);
+    const decimals = info[1].status === 'success' ? info[1].result as number : 18;
+    return { symbol, currency: { symbol, decimals } };
+  };
+
+  type VdaoPool = {
+    vdaoToken: Address; vdaoSymbol: string; reserveVdao: Amount<bigint>;
+    asset: Address; assetSymbol: string; reserveAsset: Amount<bigint>;
+    reserveAssetUSD: Amount<bigint> | null;
+  };
+  const vdaoDaxPools: VdaoPool[] = [];
+  if (vdaoNumPools > 0n) {
+    const poolContracts = [];
+    for (let i = 0n; i < vdaoNumPools; i++) {
+      poolContracts.push({ ...vdaoDaxConfig, functionName: 'getPoolReserves', args: [i] });
+    }
+    const poolResults = await client.multicall({ contracts: poolContracts, allowFailure: true });
+    for (let i = 0; i < poolResults.length; i++) {
+      const r = poolResults[i];
+      if (r.status !== 'success') {
+        vdaoDaxErrors.push(`getPoolReserves(${i}): ${(r.error as Error).message ?? 'reverted'}`);
+        continue;
+      }
+      const [asset, vdaoToken, reserveAsset, reserveVdao] =
+        r.result as unknown as [Address, Address, bigint, bigint];
+      const assetInfo = await resolveToken(asset);
+      const vdaoInfo = await resolveToken(vdaoToken);
+
+      // Price the external-asset side via TWAP spot price when it is a known
+      // collateral asset; otherwise leave it unpriced — this DAX has no VY base
+      // from which to derive a fallback price.
+      let reserveAssetUSD: Amount<bigint> | null = null;
+      const knownAsset = assets.find(a => a.address.toLowerCase() === asset.toLowerCase());
+      if (knownAsset) {
+        const spotPriceRaw = knownAsset.spotPrice.value as bigint;
+        const assetDecimals = assetInfo.currency.decimals ?? 18;
+        const scaleFactor = BigInt(10) ** BigInt(18 - assetDecimals);
+        reserveAssetUSD = new Amount(USD, spotPriceRaw > 0n
+          ? (reserveAsset * scaleFactor * spotPriceRaw) / BigInt(1e18)
+          : 0n);
+      }
+
+      vdaoDaxPools.push({
+        vdaoToken,
+        vdaoSymbol: vdaoInfo.symbol,
+        reserveVdao: new Amount(vdaoInfo.currency, reserveVdao),
+        asset,
+        assetSymbol: assetInfo.symbol,
+        reserveAsset: new Amount(assetInfo.currency, reserveAsset),
+        reserveAssetUSD,
+      });
     }
   }
 
@@ -917,7 +1019,10 @@ const fetchData = async () => {
   // so accumulatedFees will always be zero and there is no lag. Total caps
   // must equal the circulating supply at all times.
   const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
-  const capHealthy = capCirculatingLag === 0n;
+  const capLagMagnitude = capCirculatingLag < 0n ? -capCirculatingLag : capCirculatingLag;
+  // Treat sub-dust lag (integer-truncation rounding) as healthy; only a lag
+  // above CAP_HEALTH_DUST_WEI signals a real cap/circulating mismatch.
+  const capHealthy = capLagMagnitude <= CAP_HEALTH_DUST_WEI;
   if (!capHealthy) {
     overviewErrors.push(
       `Cap-circulating mismatch: (totalCaps + totalDeployedVY) − circulating = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected 0)`
@@ -1025,6 +1130,14 @@ const fetchData = async () => {
       pools: daxPools,
       errors: daxErrors,
     },
+    vdaoDax: {
+      overview: {
+        'Num Pools': String(vdaoNumPools),
+        'Swaps Paused': vdaoDaxSwapsPaused,
+      },
+      pools: vdaoDaxPools,
+      errors: vdaoDaxErrors,
+    },
     stakingRouter: {
       overview: {
         'VY in Pools': new Amount(VY, vyInPools),
@@ -1090,7 +1203,7 @@ function Content({ data }: { data: MonitorData }) {
   return (
     <div className="monitor">
       <div>
-        <h2>Balances</h2>
+        <h2>Balances <a href="https://etherscan.io/address/0xe58E29c947013B4CBCdb67f90d659c3894BE2974" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>VYT ↗ Etherscan</a></h2>
         <div className="box">
           <BalanceTable
             data={data.balanceMap}
@@ -1188,6 +1301,47 @@ function Content({ data }: { data: MonitorData }) {
             </>
             );
           })()}
+        </div>
+      </div>
+
+      <div>
+        <h2>VDAO DAX <a href="https://etherscan.io/address/0x37Cd61b3EF849805E598023f8C14bFcafE5f222E" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
+        <div className={`box ${data.vdaoDax.errors.length > 0 ? 'box--error' : ''}`}>
+          {data.vdaoDax.errors.length > 0 && (
+            <div className="error-list">
+              {data.vdaoDax.errors.map((err, i) => (
+                <div key={i} className="error-item">✗ {err}</div>
+              ))}
+            </div>
+          )}
+          {renderValues(data.vdaoDax.overview)}
+          {data.vdaoDax.pools.length > 0 && (
+            <>
+              <h3 style={{ marginTop: '12px' }}>Pools</h3>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                gap: '5px 8px',
+                alignItems: 'start',
+                marginTop: '8px',
+              }}>
+                {data.vdaoDax.pools.map((pool, i) => (
+                  <div key={i} className="box" style={{ marginBottom: 0 }}>
+                    <h4>{pool.vdaoSymbol}/{pool.assetSymbol}</h4>
+                    {renderValues({
+                      [`${pool.vdaoSymbol} Token`]: pool.vdaoToken,
+                      [`${pool.vdaoSymbol} Reserve`]: pool.reserveVdao,
+                      [`${pool.assetSymbol} Token`]: pool.asset,
+                      [`${pool.assetSymbol} Reserve`]: pool.reserveAsset,
+                      ...(pool.reserveAssetUSD
+                        ? { [`${pool.assetSymbol} Reserve (USDC)`]: pool.reserveAssetUSD }
+                        : {}),
+                    })}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
