@@ -194,7 +194,6 @@ const fetchData = async () => {
   const tokenHolders = [
     'ValinityYieldTreasury',
     'ValinityReserveTreasury',
-    'ValinityPortal',
     'ValinityDAX',
     'ValinityBuybackOfficer',
     'ValinityStakingRouter'
@@ -546,8 +545,7 @@ const fetchData = async () => {
     },
     lps: (() => {
       const vyInLPs = totalVYReserves + vyReserve;
-      const portalVY = balanceMap['ValinityPortal'][0].value;
-      const vyInUserWallets = totalUncollateralized > (vyInLPs + portalVY) ? totalUncollateralized - (vyInLPs + portalVY) : 0n;
+      const vyInUserWallets = totalUncollateralized > vyInLPs ? totalUncollateralized - vyInLPs : 0n;
       return {
         'VY in DAX': new Amount(VY, totalVYReserves),
         'VY in VY/USDC Pool': new Amount(VY, vyReserve),
