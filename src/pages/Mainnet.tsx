@@ -224,7 +224,7 @@ const fetchData = async () => {
   ] as const;
   const pairConfig = { abi: pairAbi, address: pairAddress };
 
-  const [overviewResults, mtpResponse] = await Promise.all([
+  const [overviewResults, mtpResponse, stakingStatsResponse] = await Promise.all([
     client.multicall({
       contracts: [
         { ...vyTokenConfig, functionName: 'totalSupply' },
@@ -234,6 +234,7 @@ const fetchData = async () => {
       allowFailure: true
     }),
     fetch(`${MAINNET_API_URL}/market-data?count=1`).then(r => r.json()).catch(() => null),
+    fetch(`${MAINNET_API_URL}/staking/stats`).then(r => r.json()).catch(() => null),
   ]);
 
   const vyTotalSupply = overviewResults[0].status === 'success'
@@ -686,6 +687,12 @@ const fetchData = async () => {
     ? `✅ Over-Collateralized — surplus ${solvencyMagnitudeVY} VY${coverageSuffix}`
     : `🔴 Under-Collateralized — short ${solvencyMagnitudeVY} VY${coverageSuffix}`;
 
+  // Net VY Staked (from API: deposits - withdrawals)
+  const netVyStakedRaw = stakingStatsResponse?.data?.net_vy_staked;
+  const netVyStaked = netVyStakedRaw != null
+    ? new Amount(VY, BigInt(Math.round(parseFloat(netVyStakedRaw) * 1e18)))
+    : 'Unavailable' as const;
+
   // --- Buyback ---
   const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
   const oldBuybackAddress = '0xD2F0826af20EbDc833c8418E312F23f373F8500e' as Address;
@@ -882,6 +889,7 @@ const fetchData = async () => {
       tokenHoldings: {
         'VDAX Balance': new Amount(VDAX, routerVDAX),
         'UNI-LP Balance': new Amount(UNI_LP, routerUniLP),
+        'Net VY Staked': netVyStaked,
       },
       errors: vsrErrors,
     },
@@ -1101,6 +1109,7 @@ function Content({ data }: { data: MonitorData }) {
           {renderValues(data.stakingRouter.tokenHoldings, undefined, {
             'VDAX Balance': 'Actual VDAX token balance held by the router contract',
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
+            'Net VY Staked': 'Cumulative VY deposited minus VY withdrawn through the staking router',
           })}
           <h3 style={{ marginTop: '12px' }}>Treasury Solvency</h3>
           <table>
