@@ -48,6 +48,19 @@ contract ValinityDAX is IValinityDAX, UUPSUpgradeable, AccessControl, Reentrancy
     ///         WITHOUT receiving full admin powers (no extract/pause/rescue/upgrade).
     bytes32 public constant POOL_CREATOR_ROLE = keccak256("POOL_CREATOR_ROLE");
 
+    /// @notice Scoped role that gates ONLY the asset-side reserve primitives
+    ///         (`reserveInjectAsset` / `reserveExtractAsset`). Granted to VRYO
+    ///         (ValinityReserveYieldOfficer) so it can deploy and recall the
+    ///         protocol-owned ASSET leg of DAX pools WITHOUT receiving full admin
+    ///         powers (no pause/rescue/upgrade/pro-rata extract). The VY reserve
+    ///         is structurally untouchable through this role.
+    /// @dev    The DAX does NOT track how much asset VRYO has contributed per
+    ///         pool — injected asset is commingled with VDAX-holder liquidity (no
+    ///         VDAX minted/burned). VRYO's own mirror-cap ledger is the sole
+    ///         guarantee that it never extracts more asset than it deployed; this
+    ///         role must therefore only ever be held by that audited officer.
+    bytes32 public constant RESERVE_OFFICER_ROLE = keccak256("RESERVE_OFFICER_ROLE");
+
     // ═══════════════════════════════════════════════════════════════════════════
     // STATE VARIABLES - TOKENS
     // ═══════════════════════════════════════════════════════════════════════════
@@ -865,6 +878,84 @@ contract ValinityDAX is IValinityDAX, UUPSUpgradeable, AccessControl, Reentrancy
         if (assetAmount > 0) pool.reserveAsset += assetAmount;
 
         emit LiquidityInjected(poolId, asset, vyAmount, assetAmount);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RESERVE OFFICER FUNCTIONS (VRYO)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * @inheritdoc IValinityDAX
+     * @dev Asset-only reserve injection by VRYO. Only the asset leg moves — the
+     *      VY reserve is never touched, so this can never shift holder-owned VY.
+     *      No VDAX is minted (existing holders simply own more asset reserve
+     *      pro-rata) and no ratio is enforced; the MEV bot rebalances any price
+     *      drift afterward. VRYO must approve this contract for the asset first.
+     */
+    function reserveInjectAsset(
+        uint256 poolId,
+        uint256 assetAmount
+    )
+        external
+        onlyRole(RESERVE_OFFICER_ROLE)
+        nonReentrant
+    {
+        if (poolId >= pools.length) revert InvalidPoolId();
+        if (assetAmount == 0) revert InvalidAmount();
+
+        Pool storage pool = pools[poolId];
+        address asset     = pool.asset;
+
+        // ── INTERACTIONS: pull the asset first ──
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), assetAmount);
+
+        // ── EFFECTS ──
+        pool.reserveAsset += assetAmount;
+
+        emit ReserveAssetAdded(poolId, asset, assetAmount);
+    }
+
+    /**
+     * @inheritdoc IValinityDAX
+     * @dev Asset-only reserve extraction by VRYO. Pulls an exact asset amount so
+     *      VRYO can recall the asset leg; the VY reserve is never touched. Unlike
+     *      adminExtractLiquidity (pro-rata both legs by basis points), no VDAX is
+     *      burned and the pool is never removed/compacted — only the asset
+     *      reserve is thinned. Reverts if the amount exceeds the asset reserve.
+     *      The MEV bot rebalances any price drift afterward.
+     */
+    function reserveExtractAsset(
+        uint256 poolId,
+        uint256 assetAmount,
+        address recipient
+    )
+        external
+        onlyRole(RESERVE_OFFICER_ROLE)
+        nonReentrant
+        returns (uint256 assetOut)
+    {
+        if (poolId >= pools.length) revert InvalidPoolId();
+        if (recipient == address(0)) revert InvalidAddress();
+        if (assetAmount == 0) revert InvalidAmount();
+
+        Pool storage pool = pools[poolId];
+
+        // Cache storage reads (both needed: rAsset for check+write, asset for transfer+event)
+        uint256 rAsset = pool.reserveAsset;
+        address asset  = pool.asset;
+
+        if (assetAmount > rAsset) revert InsufficientLiquidity();
+
+        // ── EFFECTS: bounded above by the reserve checked above ──
+        unchecked {
+            pool.reserveAsset = rAsset - assetAmount;
+        }
+
+        // ── INTERACTIONS: transfer extracted asset to recipient ──
+        IERC20(asset).safeTransfer(recipient, assetAmount);
+
+        emit ReserveAssetRemoved(poolId, asset, assetAmount, recipient);
+        return assetAmount;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

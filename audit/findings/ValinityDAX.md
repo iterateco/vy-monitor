@@ -1,75 +1,56 @@
-# Audit: ValinityDAX (DAX) — contract 10 · the CC-1 lynchpin
+# ValinityDAX (DAX) — Findings · **RE-AUDIT (+ reserve-officer asset injection)**
 
-> **RECONCILED** with multi-agent adversarial workflow `w91m0w9q5` (31 agents; 21 findings → 16 survived / 5 refuted, severities corrected; 13 substantive survivors dedup to ~3 facts). **Verdict: CLOSED relative to roles/whitelists — ZERO permissionless entry, no DAX-internal break.** **0 permissionless-exploitable.** AMM/LP math verified **SOUND & value-conserving**. The long-pending **CC-1 resolves with a pivot**: DAX correctly gates swaps; the officers' `minOut=0` no-sandwich guarantee rests on **VEO + StakingRouter** (the public-facing whitelist members) — the residual Critical, if any, lives in *those* contracts, not DAX. As a DAX finding CC-1 is **Medium**; remaining items are Low/Info (one gated LP round-trip leak + basket non-standard-asset hygiene + admin handoff powers).
+> ⚠️ **OVERWRITES the prior DAX audit** (`w91m0w9q5`, impl `0x8efde23e`). RE-DEPLOYED to impl `0x7c240521`. The only material change is the new `RESERVE_OFFICER_ROLE` + `reserveInjectAsset`/`reserveExtractAsset` (asset-only, VRYO-driven). The swap / AMM / LP / admin core is **unchanged** (build-info confirms), so the prior conclusions on that core carry over.
 
-- **Proxy:** `0xD256C672616f7c5DEE3e42a8199f121EE08401B7` → **UUPS impl** `0x8efde23edc99a4736d1c3e4aba3e75e6830b86f8`
-- **Source:** as-deployed `ValinityDAX.sol` (877 ln, solcInputs `cb6d5b6c`) + `VDAX.sol` (166 ln, basket LP) · solc 0.8.27 · UUPS + AccessControl + ReentrancyGuardTransient + Initializable. No external library.
-- **Role in flow:** the protocol's **private constant-product AMM** — N pools each `{asset, reserveVY, reserveAsset}`, one basket LP token (VDAX). Officers swap reserve-asset↔VY here at protocol-controlled prices. **No fee.**
+**Address:** proxy `0xD256C672616f7c5DEE3e42a8199f121EE08401B7` → impl `0x7c2405212274b69c262e8de823a1826bfb763b3d` (UUPS).
+**Source==live:** PROVEN (live impl metadata-IPFS == hardhat artifact == build-info `c3d525c0` compile of workspace `ValinityDAX.sol` 968 ln + `VDAX.sol` 166 ln, keccak match; HEAD `1aa24be`). solc 0.8.27 / runs=100 / cancun.
+**Status:** ✅ RECONCILED with workflow `wqm7zyrs0` (26 agents, 6 dims joint VRYO+DAX; 35 raw → 13 survived / 6 refuted / 16 Low-Info). Verdict: closed relative to roles/whitelists; the new reserve surface is safe-by-design; 0 permissionless-exploitable. Tally (DAX side): 0 Critical · 2 High · 2 Medium · 3 Low.
 
-## Gate 1 — Source == Live ✅ (triple-confirmed)
-artifact.deployedBytecode **== live impl** (bytediff: only 2 UUPS immutables differ). metadata ipfs `7598b902…` **identical** across artifact, recompile-from-solcInputs(`cb6d5b6c`), and live impl. The recorded solcInputs IS the deployed source. As-deployed saved to `audit/asdeployed/ValinityDAX/`.
+## Summary
 
-## What it is — private basket DEX (VY/asset pools, VDAX basket LP)
-| Function | Access | Effect |
-|---|---|---|
-| `swapExactIn(poolId,tokenIn,amountIn,minOut,recipient)` | **swap-whitelist** | constant product (no fee); enforces `minOut`; out→`recipient` |
-| `depositVYOnly(vyAmount,recipient)` | **liquidity-whitelist** | VY-only, distributed pro-rata across pools; mint VDAX = `vy×supply/(2×totalVYReserves)` |
-| `withdraw(shares,recipient)` | **liquidity-whitelist** | burn VDAX, pro-rata VY+asset from all pools, convert asset→VY internally, return 100% VY |
-| `addPool(asset,vySeed,assetSeed)` | POOL_CREATOR_ROLE (VARO) ‖ ADMIN | add a VY/asset pool (arbitrary asset) |
-| `initializeFirstPool`/`adminWithdrawRaw`/`adminExtractLiquidity`/`adminInjectLiquidity`/`updateSwapWhitelist`/`updateLiquidityWhitelist`/`updatePauseStatus`/`rescueTokens`/`_authorizeUpgrade` | ADMIN | seed / rebalance / whitelist / pause / rescue / UUPS |
-| views (`getPoolReserves`/`getNumPools`/`getTotalVYReserves`/`getUserShare`/`previewWithdraw`/`previewDepositVYOnly`) | view | — |
+The protocol's private, VY-hardcoded basket DEX (every pool VY/asset, one shared VDAX LP). Swaps are whitelist-gated, constant-product, no-fee, value-conserving (unchanged + still sound). **New surface:** two asset-only primitives gated to `RESERVE_OFFICER_ROLE` (VRYO only), letting VRYO deposit/withdraw single-sided asset depth without a forced VY sale or a VDAX mint/burn.
 
-**Live state (mainnet):** VY=`0x597b2952`, vdax=`0xd985c0ea`; **6 pools** (LINK / token`0xf6b111` / WBTC / WETH / token`0x2d1f72` / PAXG — the basket includes non-reserve "launched/alliance" tokens); totalVYReserves≈174k VY; no pauses.
-**Live swap whitelist = {VBBO, VAO, VEO, StakingRouter, VGO}.** Liquidity whitelist includes StakingRouter. (VRYO + live MEVBot `0x6f2F4580` are **not** swap-whitelisted.)
+- **Closed relative to roles/whitelists (PASS).** No permissionless entry. The new `reserveInjectAsset` only adds asset; `reserveExtractAsset` reverts above the reserve and never touches VY or VDAX. Both `nonReentrant`.
+- **New lever:** `RESERVE_OFFICER_ROLE` can drain pool **asset** reserves (never VY) to an arbitrary recipient — held only by VRYO (which hardcodes VRT). Treat as admin-equivalent at handoff.
+- **CC-1** still pivots to VEO + StakingRouter (discharged in those audits).
 
-## Gate 0 — CLOSED relative to roles/whitelists — NO permissionless entry
-**Every** state-changing function is gated (`onlySwapWhitelisted` / `onlyLiquidityWhitelisted` / `onlyRole` / `POOL_CREATOR_ROLE`). There is **no permissionless entry point and no whitelist-disable toggle**. All token sinks (swap-out, withdraw, extract, rescue) go to a `recipient`/`to` chosen by a **whitelisted or admin** caller; pulls are `safeTransferFrom(msg.sender)`. → DAX is a permissioned vault; its security is the **whitelist composition** + the **AMM/LP math** + **admin powers**, not a permissionless surface.
+**Live:** RESERVE_OFFICER_ROLE = VRYO-only; MEV bot now swap-whitelisted (rebalancer wired); VLM holds zero DAX roles.
 
-## The CC-1 resolution (the pivot) — preliminary
-The officers' (VBBO/VAO) `minOut=0` swaps assume "DAX is private → no sandwich." **DAX delivers the gating** (only whitelisted addresses swap). **But the whitelist includes public-facing contracts:**
-- **VEO (ExchangeOfficer `0x48C88B80`)** — "the only public swap address" → the public can swap on DAX pools via VEO → can move a pool's VY/asset price.
-- **StakingRouter (`0x664b3A81`)** — public staking; `depositVYOnly`/`withdraw` move `reserveVY` across **all** pools → moves prices.
+---
 
-→ **The no-sandwich guarantee for officers' `minOut=0` is NOT provided by DAX alone; it rests on VEO + StakingRouter** not exposing a same-block price-move on the officer pools. *The workflow is enumerating the exact VEO + SR obligations.* This is the CC-1 item carried since VAO — it resolves into **obligations on VEO + StakingRouter**, to be discharged in those audits.
+## Findings (preliminary — to be reconciled with workflow)
 
-## Findings (reconciled): 0 permissionless-exploitable · 1 Medium (cross-contract) · several Low · rest Info
-| ID | Sev | Finding |
-|---|---|---|
-| **DAX-M1 (CC-1)** | **Medium** (cross-contract) | Officers VBBO/VAO swap with **`minOut=0`**. DAX **correctly** restricts swaps to the whitelist and *offers* a `minAmountOut` guard (enforced, L617/640) — the exposure exists only because officers pass 0. The price lever is real: `depositVYOnly` raises **every** pool's `reserveVY` proportionally (L411-417); a `swapExactIn` moves one pool. So a swap-whitelisted (**VEO**) or liquidity-whitelisted (**StakingRouter**) actor can skew the price an officer's minOut=0 swap sees and reverse it same-block. **No DAX-internal break** — the no-sandwich guarantee lives in VEO + StakingRouter (obligations below). The true Critical, if any, is proven there. |
-| **DAX-L1** | **Low** | **Single-sided deposit/withdraw round-trip leak** (NOT the divisor-2, which cancels — that root cause was *refuted*). A single-sided VY `depositVYOnly` self-skews each pool's price; an immediate `withdraw` re-values the asset at that skew and pays surplus VY from reserves → a **wealth transfer from other VDAX holders to the round-tripper** (~8–11% worst case), value-conserving system-wide (not minted from thin air), **zero for a lone holder**. Realizable ONLY if **StakingRouter** exposes an atomic deposit+withdraw round-trip → mitigation is a StakingRouter obligation. |
-| **DAX-L2** | **Low** | **Basket non-standard-asset desync.** DAX uses **virtual reserves** (no `balanceOf` reconciliation). A fee-on-transfer / rebasing / reverting pool asset (added via `addPool`/VARO or `initializeFirstPool`/admin) drifts `reserveAsset` from real balance; a reverting asset bricks the global `adminWithdrawRaw` loop (but `adminExtractLiquidity` is **per-pool** so healthy pools stay rebalanceable, and `withdraw` returns 100% VY so LP exits are unaffected). All introduction paths role-gated. **Live note: PAXG (pool 5) is fee-on-transfer — verify desync within tolerance / accept.** |
-| **DAX-L3** | **Low** | `addPool` (L671) does **no asset-implementation validation** (structural only) → FoT/rebasing onboarding hygiene gap. Reentrancy sub-claim refuted (transient `nonReentrant` everywhere). |
-| **DAX-I-inject** | Info | `adminInjectLiquidity` (L844) arbitrary-ratio price lever (admin) + the **stale "MEV bot rebalances afterward" comment** (L840) — the named MEVBot `0x6f2F4580` is **not swap-whitelisted** and cannot rebalance → a post-inject skew persists until a whitelisted swapper acts (operational/doc defect to fix). |
-| **DAX-I-rescue** | Info | `rescueTokens` can desync reserves (admin footgun, self-warned L755); grants no extraction beyond existing admin levers. |
-| **DAX-I-rori** | Info | Read-only reentrancy via `getTotalVYReserves` during `adminWithdrawRaw` asset transfer — no closed-circuit consumer (officers read single-pool slots only); defensive hardening note. |
-| **DAX-I-vault** | Info | No permissionless entry; AMM enforces minOut + InsufficientLiquidity; constant product, no fee; `mulDiv` rounds down (pool's favor). |
+### DAX-H1 [High — role/admin] `RESERVE_OFFICER_ROLE` can drain pool asset reserves to an arbitrary address
+[ValinityDAX.sol:927](../asdeployed/ValinityDAX/contracts/dex/ValinityDAX.sol#L927) — `reserveExtractAsset(poolId, assetAmount, recipient)` transfers up to the full `reserveAsset` of any pool to a caller-supplied `recipient`, gated only by `RESERVE_OFFICER_ROLE`. It is **asset-only** (VY reserves untouched, no VDAX burned) and currently held **only by VRYO** (which always passes `address(vrt)`). But the role is a powerful asset-drain lever: a malicious/compromised holder — or a malicious **VRYO upgrade** (VRYO holds the role) — could pull every pool's asset reserve to an attacker. **Handoff:** grant `RESERVE_OFFICER_ROLE` ONLY to the audited VRYO (live ✅); treat it as admin-equivalent; timelock VRYO's upgrade. (Ties to VRYO-C1.)
 
-## AMM/LP math verdict — SOUND & value-conserving
-- **Swap rounding sound:** `Math.mulDiv` rounds down (pool's favor), output bounded by tracked reserves (`InsufficientLiquidity`), `minAmountOut` enforced. Constant product, no fee, prices off live reserves. No rounding exploit, k never decreases via rounding.
-- **divisor-2 mint is NOT asymmetric** (original suspicion *refuted*): the 2× scale-down on mint is fully recovered in `withdraw`'s `shares/totalSupply` fraction; round-trip net is invariant. Lone-holder deposit→withdraw-all returns exactly the VY deposited.
-- **`withdraw` internal asset→VY conversion conserves value system-wide** (+0). The only leak is DAX-L1 (single-sided round-trip inter-holder transfer), gated + mitigated at StakingRouter.
+### DAX-H2 [High — admin/upgrade] DAX upgrade (or `revokeRole`) can strand VRYO's deployed assets
+[ValinityDAX.sol:965](../asdeployed/ValinityDAX/contracts/dex/ValinityDAX.sol#L965) — DAX `_authorizeUpgrade` is ADMIN_ROLE (same KMS key as VRYO). A malicious DAX upgrade or `revokeRole(RESERVE_OFFICER_ROLE, VRYO)` permanently breaks VRYO's recall path: `reserveExtractAsset` reverts → VRYO's try/catch emits `RecallSkipped` → the deployed asset (live ~3.83 WETH + 0.099 WBTC + 0.326 PAXG, scaling with the deploy ratio) is **stranded** in the DAX, recoverable only via the DAX's own `adminExtractLiquidity` (admin path, outside VRYO). Availability/griefing, not a value leak. **Handoff:** the shared KMS admin means one key compromise hits both VRYO and DAX — migrate both under the **same** governance timelock; treat the pair atomically.
 
-## ⚠️ Cross-contract obligations (these carry the residual Critical — discharge in those audits)
-### VEO (ExchangeOfficer) — the only public swap address on DAX
-1. No public path may **atomically move-then-revert** a DAX pool price around an officer tx (no same-block round-trip swap primitive on reserve-asset pools).
-2. VEO must apply its **own slippage/price-band** on the DAX swaps it routes (DAX accepts whatever `minOut` VEO passes).
+### DAX-M1 [Medium — CC-1, cross-contract] Officer `minOut=0` no-sandwich rests on VEO + StakingRouter
+Unchanged from the prior audit: `swapExactIn` correctly gates to the swap-whitelist, but the whitelist includes VEO (public router) and StakingRouter, so the officers' `minOut=0` no-sandwich guarantee is discharged in **those** contracts (both audited ✅), not in DAX. Carried forward.
 
-### StakingRouter — public staking (swap + liquidity whitelisted)
-3. `depositVYOnly`/`withdraw` must be **non-atomically-round-trippable** (fee / timelock / share-lockup / per-block guard) — this simultaneously closes the **CC-1 sandwich lever (DAX-M1)** AND the **LP round-trip leak (DAX-L1)**.
-4. No public staker may drive a large transient all-pool VY injection that sandwiches an officer swap.
+### DAX-M2 [Medium — accounting, by-design] Single-sided reserve ops shift price → arb dependency
+`reserveInjectAsset`/`reserveExtractAsset` move only the asset leg, so they shift the pool price (k changes); the design relies on the **MEV bot** (now swap-whitelisted ✅) to rebalance the drift. This is intentional, but it means each VRYO deploy creates a predictable arb that the bot captures → VBBO. Confirm no other whitelisted party can front-run the bot for the arb (the value should route to VBBO, and the VY leg is never directly moved by the reserve ops). See VRYO-M1 for the backing-quality consequence.
 
-### VARO (POOL_CREATOR_ROLE) — the only gate against a basket poison-asset
-5. Must never list FoT/rebasing/reverting assets (DAX has no validation + virtual reserves). Audit VARO's listing controls.
+### DAX-M3 [Medium — accounting, FoT] `reserveInjectAsset` credits nominal, not balance-delta → PAXG over-count
+[ValinityDAX.sol:913](../asdeployed/ValinityDAX/contracts/dex/ValinityDAX.sol#L913) — `pool.reserveAsset += assetAmount` books the **nominal** request, not the received balance-delta. For FoT PAXG, the DAX's `reserveAsset` exceeds its actual token balance → the constant-product swap math over-estimates available asset and can revert at `safeTransfer` (the tail extractor is short), and `getPoolReserves` overstates the asset reserve (extends the pre-existing DAX-L2). **VRYO compensates on its side** (books the DAX's *real* balance gain, recall clamps to the real balance), so cap conservation + recall are unaffected, but the DAX's own ledger/AMM-pricing degrades for PAXG. Whitelisted-swapper-facing, not permissionless. **Fix on a future upgrade:** balance-delta accounting in `reserveInjectAsset` (mirror VRYO/the VDAO-DAX).
 
-### Officer policy
-6. VBBO/VAO's `minOut=0` is safe ONLY under (1)–(4) — document it as a guarantee inherited from VEO+StakingRouter, not from DAX.
+### DAX-L1 [Low — admin coordination] `adminExtractLiquidity` 100% can desync VRYO's ledger
+[ValinityDAX.sol:791](../asdeployed/ValinityDAX/contracts/dex/ValinityDAX.sol#L791) — removing a pool VRYO has deployed into (basisPoints=10000) leaves VRYO's `capVRYO`/`deployedAsset` non-zero while `hasPool` is false → VRYO `execute()` early-returns and the ledger is stale (and globalCap conservation breaks until reconciled). Admin-coordination only; mitigated by `VRYO.rescueTokens()`. **Handoff:** coordinate pool removal with `rescueTokens` first.
 
-## Check-off
-- [x] Source == live (triple-confirmed: bytediff + metadata ipfs `7598b902` across artifact/recompile/live)
-- [x] Fund-flow mapped — CLOSED relative to roles/whitelists, no permissionless entry (my read)
-- [x] Live-state read (pools, whitelist membership, pauses — VEO/SR are the public-facing members)
-- [x] Multi-agent adversarial workflow `w91m0w9q5` reconciled (31 agents; 16 survived / 5 refuted; severities corrected)
-- [ ] **User agrees → check off**
+### DAX-L2 [Low — admin DoS] `updateSwapWhitelist` can disable swaps / the rebalancer
+[ValinityDAX.sol:731](../asdeployed/ValinityDAX/contracts/dex/ValinityDAX.sol#L731) — a malicious admin can remove VEO/VBBO/VAO/MEV-bot, DoS-ing routing + the new reserve-injection rebalancing (withdrawals use a separate liquidity-whitelist, so they're not blocked — the workflow corrected that over-claim). Grief, not a leak. Timelock.
 
-## Final tally (reconciled): **0 permissionless-exploitable**, **1 Medium** (DAX-M1/CC-1 — cross-contract, lives in VEO+SR), **3 Low** (DAX-L1 LP round-trip leak; DAX-L2 basket non-standard-asset desync; DAX-L3 addPool no-validation), rest Info.
-**DAX is CLOSED relative to roles/whitelists — no permissionless entry, no DAX-internal closed-circuit break.** AMM/LP math is sound and value-conserving (swap rounds in pool's favor; divisor-2 cancels; no honest-holder round-trip profit). The entire CC-1 risk + the LP leak are **cross-contract obligations on VEO + StakingRouter** — the Fase-4 handoff must be conditioned on those audits. Permanent admin powers (whitelist membership #1, + UUPS upgrade which dominates all) must be vested in **timelocked governance**; **both DEFAULT_ADMIN_ROLE and ADMIN_ROLE** must transfer (initialize grants both to one address; DEFAULT_ADMIN is role-admin of ADMIN). **Token-onboarding policy:** never list FoT/rebasing assets via `addPool` (note PAXG is FoT — accept/verify).
+### DAX-L3 [Low] Single-sided LP round-trip leak / basket non-standard-asset hygiene / addPool no-validation
+Carried forward from the prior audit (the unchanged LP/swap core): a gated single-sided LP round-trip leak (StakingRouter-mitigated), basket non-standard-asset desync, and `addPool` no-validation (curate assets; POOL_CREATOR=VARO trust).
+
+### DAX-Info [confirmed] VLM removed; MEV bot whitelisted
+VLM holds **zero** DAX roles (RESERVE_OFFICER / swapWhitelist / ADMIN all false). The MEV bot is now swap-whitelisted — the redesign's "MEV bot rebalances" is live + intentional (resolves the prior audit's stale-comment operational defect).
+
+---
+
+## Handoff checklist
+1. Keep `RESERVE_OFFICER_ROLE` = the audited VRYO only (live ✅); treat as admin-equivalent; timelock VRYO's upgrade (DAX-H1 ↔ VRYO-C1).
+2. Freeze the swap-whitelist to audited contracts; confirm the MEV bot stays included (load-bearing for the new rebalancing) (DAX-M2).
+3. Migrate DEFAULT_ADMIN + ADMIN together → governance + timelock; the admin LP levers (`adminExtract`/`rescueTokens`) keep arbitrary recipients.
+4. CC-1: ensure VEO + StakingRouter remain the only public-facing whitelist members (DAX-M1).

@@ -545,6 +545,147 @@ const fetchData = async () => {
   const routerVYInPair = uniLpTotalSupply > 0n ? (vyInPair * routerUniLP) / uniLpTotalSupply : 0n;
   const vyInPools = routerVYInDax + routerVYInPair;
 
+  // --- Staking System Debt (principal + accrued-but-unpaid yield, per asset) ---
+  // The protocol's outstanding liability to stakers, grouped so every stake of
+  // the same asset is summed together. Two stake kinds:
+  //   • VY stakes  → principal is the aggregate `totalStakedVY`; accrued-unpaid
+  //                  yield is Σ VYO.pendingYield(user, stakeId) over each user's
+  //                  currently-active stakes.
+  //   • Asset stakes → principal is the aggregate VSR.totalPrincipalByAsset(asset)
+  //                  (asset-native units); accrued-unpaid yield is
+  //                  Σ VYO.pendingAssetYield(user, stakeId) grouped by asset.
+  // No on-chain aggregate of yield-owed exists, so stakers are enumerated from
+  // the VSR deposit events and each active stake's pending yield is read live.
+  const vyoConfig = getContractConfig('ValinityYieldOfficer');
+  const vsrDepositEvent = parseAbiItem('event Deposit(address indexed user, uint8 stakeId, uint256 vyAmount, uint8 tierId, uint256 vdaxMinted, uint256 uniMinted, uint256 daxCreditsAdd, uint256 uniCreditsAdd)');
+  const assetStakeDepositedEvent = parseAbiItem('event AssetStakeDeposited(address indexed user, uint256 indexed stakeId, address indexed asset, uint256 principalAsset, uint8 tier, uint256 lpAmount, bool isUniLP)');
+
+  const [vyDepositLogs, assetDepositLogs] = await Promise.all([
+    client.getLogs({ address: vsrConfig.address, event: vsrDepositEvent, fromBlock: 0n, toBlock: 'latest' }),
+    client.getLogs({ address: vsrConfig.address, event: assetStakeDepositedEvent, fromBlock: 0n, toBlock: 'latest' }),
+  ]);
+
+  // VY stakes: accrued-unpaid yield over every active stake of every VY staker.
+  const vyStakers = [...new Set(vyDepositLogs.map(l => l.args.user as Address))];
+  let vyPendingYield = 0n;
+  if (vyStakers.length > 0) {
+    const activeStakesResults = await client.multicall({
+      contracts: vyStakers.map(u => ({ ...vyoConfig, functionName: 'getActiveStakes', args: [u] })),
+      allowFailure: true,
+    });
+    const vyPendingCalls: { user: Address; stakeId: number }[] = [];
+    vyStakers.forEach((u, i) => {
+      const r = activeStakesResults[i];
+      if (r.status === 'success') {
+        for (const id of r.result as unknown as readonly number[]) vyPendingCalls.push({ user: u, stakeId: Number(id) });
+      } else {
+        vsrErrors.push(`VYO.getActiveStakes(${u}): ${(r.error as Error).message ?? 'reverted'}`);
+      }
+    });
+    if (vyPendingCalls.length > 0) {
+      const vyPendingResults = await client.multicall({
+        contracts: vyPendingCalls.map(c => ({ ...vyoConfig, functionName: 'pendingYield', args: [c.user, c.stakeId] })),
+        allowFailure: true,
+      });
+      vyPendingYield = vyPendingResults.reduce((s, r) => s + (r.status === 'success' ? r.result as bigint : 0n), 0n);
+    }
+  }
+
+  // Asset stakes: dedupe (user, stakeId) — stakeIds are monotonic so each pair is
+  // unique, but inactive (withdrawn) stakes return 0 yield by design.
+  const assetStakeKeys = assetDepositLogs.map(l => ({
+    user: l.args.user as Address,
+    stakeId: l.args.stakeId as bigint,
+    asset: l.args.asset as Address,
+  }));
+  const seenAssetStake = new Set<string>();
+  const uniqueAssetStakes = assetStakeKeys.filter(k => {
+    const key = `${k.user}-${k.stakeId}`;
+    if (seenAssetStake.has(key)) return false;
+    seenAssetStake.add(key);
+    return true;
+  });
+
+  const yieldByAsset = new Map<Address, bigint>();
+  if (uniqueAssetStakes.length > 0) {
+    const assetPendingResults = await client.multicall({
+      contracts: uniqueAssetStakes.map(k => ({ ...vyoConfig, functionName: 'pendingAssetYield', args: [k.user, k.stakeId] })),
+      allowFailure: true,
+    });
+    uniqueAssetStakes.forEach((k, i) => {
+      const r = assetPendingResults[i];
+      const y = r.status === 'success' ? r.result as bigint : 0n;
+      yieldByAsset.set(k.asset, (yieldByAsset.get(k.asset) ?? 0n) + y);
+    });
+  }
+
+  // Per-asset principal (aggregate) + native-unit metadata for display.
+  const stakedAssets = [...new Set(assetStakeKeys.map(k => k.asset))];
+  const assetDebtRows: { symbol: string; principal: Amount<bigint>; yieldOwed: Amount<bigint> }[] = [];
+  if (stakedAssets.length > 0) {
+    const assetMetaResults = await client.multicall({
+      contracts: stakedAssets.flatMap(a => [
+        { ...vsrConfig, functionName: 'totalPrincipalByAsset', args: [a] },
+        { abi: abis.ERC20, address: a, functionName: 'decimals' },
+        { abi: abis.ERC20, address: a, functionName: 'symbol' },
+      ]),
+      allowFailure: true,
+    });
+    stakedAssets.forEach((a, i) => {
+      const principalR = assetMetaResults[i * 3];
+      const decimalsR = assetMetaResults[i * 3 + 1];
+      const symbolR = assetMetaResults[i * 3 + 2];
+      const principal = principalR.status === 'success' ? principalR.result as bigint : 0n;
+      const decimals = decimalsR.status === 'success' ? Number(decimalsR.result) : 18;
+      const symbol = symbolR.status === 'success' ? symbolR.result as string : a.slice(0, 8);
+      const cur: Currency = { symbol, decimals };
+      assetDebtRows.push({
+        symbol,
+        principal: new Amount(cur, principal),
+        yieldOwed: new Amount(cur, yieldByAsset.get(a) ?? 0n),
+      });
+    });
+  }
+
+  // VY stakes lead the table (principal = the live aggregate totalStakedVY).
+  const stakingDebtRows = [
+    { symbol: 'VY', principal: new Amount(VY, totalStakedVY), yieldOwed: new Amount(VY, vyPendingYield) },
+    ...assetDebtRows,
+  ];
+
+  // --- Treasury Solvency (over-collateralization invariant) ---
+  // The protocol pays yield (and tops up principal shortfalls) from VYT, and the
+  // Yield Officer only lets payouts continue while
+  //   VYT.getAvailableForYield() >= VYO.totalPromisedYield()
+  // Both are VY-denominated. `totalPromisedYield` is the system's full reserved
+  // debt (committed-but-unpaid yield + the 2× principal-protection reservation),
+  // a superset of the accrued yield shown per-asset above — so a green check here
+  // proves every row of the debt table is covered. (Principal itself is LP-backed
+  // in the router; VYT only stands behind yield + shortfalls.)
+  const vytConfig = getContractConfig('ValinityYieldTreasury');
+  const solvencyResults = await client.multicall({
+    contracts: [
+      { ...vytConfig, functionName: 'getBalance' },
+      { ...vytConfig, functionName: 'getAvailableForYield' },
+      { ...vyoConfig, functionName: 'totalPromisedYield' },
+    ],
+    allowFailure: true,
+  });
+  const vytBalance = solvencyResults[0].status === 'success' ? solvencyResults[0].result as bigint : (() => { vsrErrors.push('VYT.getBalance: reverted'); return 0n; })();
+  const vytAvailableForYield = solvencyResults[1].status === 'success' ? solvencyResults[1].result as bigint : (() => { vsrErrors.push('VYT.getAvailableForYield: reverted'); return 0n; })();
+  const totalPromisedYield = solvencyResults[2].status === 'success' ? solvencyResults[2].result as bigint : (() => { vsrErrors.push('VYO.totalPromisedYield: reverted'); return 0n; })();
+  const solvencySurplus = vytAvailableForYield - totalPromisedYield;
+  const overCollateralized = solvencySurplus >= 0n;
+  const solvencyRatioPct = totalPromisedYield > 0n
+    ? Number((vytAvailableForYield * 10000n) / totalPromisedYield) / 100
+    : null;
+  const solvencyMagnitudeVY = (Number(solvencySurplus < 0n ? -solvencySurplus : solvencySurplus) / 1e18)
+    .toLocaleString('en-US', { maximumFractionDigits: 2 });
+  const coverageSuffix = solvencyRatioPct != null ? ` (${solvencyRatioPct.toFixed(1)}% coverage)` : '';
+  const solvencyLabel = overCollateralized
+    ? `✅ Over-Collateralized — surplus ${solvencyMagnitudeVY} VY${coverageSuffix}`
+    : `🔴 Under-Collateralized — short ${solvencyMagnitudeVY} VY${coverageSuffix}`;
+
   // --- Buyback ---
   const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
   const oldBuybackAddress = '0xD2F0826af20EbDc833c8418E312F23f373F8500e' as Address;
@@ -718,6 +859,16 @@ const fetchData = async () => {
       errors: vdaoDaxErrors,
     },
     stakingRouter: {
+      debt: stakingDebtRows,
+      solvency: {
+        available: new Amount(VY, vytAvailableForYield),
+        balance: new Amount(VY, vytBalance),
+        promised: new Amount(VY, totalPromisedYield),
+        surplus: new Amount(VY, solvencySurplus < 0n ? -solvencySurplus : solvencySurplus),
+        overCollateralized,
+        ratioPct: solvencyRatioPct,
+        label: solvencyLabel,
+      },
       overview: {
         'VY in Pools': new Amount(VY, vyInPools),
         'Total Staked VY': new Amount(VY, totalStakedVY),
@@ -922,19 +1073,58 @@ function Content({ data }: { data: MonitorData }) {
               ))}
             </div>
           )}
-          {renderValues(data.stakingRouter.overview, undefined, {
-            'Total DAX Credits': 'Sum of all stakers\' DAX credit shares in the router',
-            'Total UNI Credits': 'Sum of all stakers\' UNI-LP credit shares in the router',
-            'DAX Index': 'Conversion ratio from DAX credits to VDAX tokens (grows over time with yield)',
-            'UNI Index': 'Conversion ratio from UNI credits to UNI-LP tokens (grows over time with yield)',
-            'Deposits Paused': 'Whether new staking deposits are currently accepted',
-            'Withdrawals Paused': 'Whether staking withdrawals are currently allowed',
-          })}
+          <h3
+            title="The protocol's outstanding liability to stakers: original principal staked plus yield that has accrued but has not yet been claimed. Grouped so every stake of the same asset is summed together. Values are in each asset's native units."
+            style={{ marginTop: 0, cursor: 'help', borderBottom: '1px dotted #888', display: 'inline-block' }}
+          >System Debt (Principal + Accrued Yield Owed)</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Asset</th>
+                <th>Principal Staked</th>
+                <th>Accrued Yield Owed</th>
+                <th>Total Debt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.stakingRouter.debt.map(row => (
+                <tr key={row.symbol}>
+                  <td><strong>{row.symbol}</strong></td>
+                  <td><Value>{row.principal}</Value></td>
+                  <td><Value>{row.yieldOwed}</Value></td>
+                  <td><Value>{new Amount(row.principal.currency, row.principal.value + row.yieldOwed.value)}</Value></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
           <h3 style={{ marginTop: '12px' }}>Token Holdings</h3>
           {renderValues(data.stakingRouter.tokenHoldings, undefined, {
             'VDAX Balance': 'Actual VDAX token balance held by the router contract',
             'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
           })}
+          <h3 style={{ marginTop: '12px' }}>Treasury Solvency</h3>
+          <table>
+            <tbody>
+              <tr>
+                <td>
+                  <strong title="VY held by the Yield Treasury (VYT) that is available to pay yield — its VY balance minus the 0.5% priority-officer cushion.">VYT Available for Yield</strong>
+                </td>
+                <td><Value>{data.stakingRouter.solvency.available}</Value></td>
+              </tr>
+              <tr>
+                <td>
+                  <strong title="Total reserved debt the treasury must stand behind: committed-but-unpaid yield plus the 2× principal-protection reservation, all in VY. This is a superset of the accrued yield shown per-asset above.">Total Promised Debt (reserved)</strong>
+                </td>
+                <td><Value>{data.stakingRouter.solvency.promised}</Value></td>
+              </tr>
+              <tr>
+                <td>
+                  <strong title="Over-collateralized when VYT Available for Yield ≥ Total Promised Debt — the protocol's own solvency invariant. The surplus is the VY buffer above all reserved debt.">Coverage</strong>
+                </td>
+                <td><Value>{data.stakingRouter.solvency.label}</Value></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 

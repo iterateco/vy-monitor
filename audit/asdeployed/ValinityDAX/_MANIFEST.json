@@ -1,0 +1,29 @@
+{
+  "contract": "ValinityDAX — VY-only basket DEX (RE-AUDIT: + reserve-officer asset injection for VRYO)",
+  "proxy": "0xD256C672616f7c5DEE3e42a8199f121EE08401B7",
+  "impl": "0x7c2405212274b69c262e8de823a1826bfb763b3d",
+  "supersedes": "Prior DAX audit (impl 0x8efde23e, 2026-06-02). RE-DEPLOYED: the only material change is the new RESERVE_OFFICER_ROLE + reserveInjectAsset/reserveExtractAsset (asset-only, VRYO-driven). The swap/AMM/LP core is UNCHANGED (build-info confirms). This file OVERWRITES the prior DAX audit info.",
+  "deployment": "UUPS proxy (impl slot -> 0x7c240521; admin slot empty). ADMIN_ROLE-gated _authorizeUpgrade. numDeployments updated by the re-deploy.",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard) + build-info source keccak",
+    "liveImplMetadataIpfs": "12204745a60123569b59ce4b4b48a96fe67db0688de54d1619f37e29b5cd6e7ccb88",
+    "match": "live impl metadata IPFS == hardhat artifact deployedBytecode metadata == build-info c3d525c0 compile of the workspace ValinityDAX.sol + VDAX.sol (build-info embedded source keccak == workspace keccak, EXACT, both files).",
+    "git": "workspace == HEAD 1aa24be ('upgrades'). ValinityDAX.sol 968 ln (was 877 ln) + VDAX.sol 166 ln.",
+    "solc": "0.8.27+commit.40a35a09",
+    "optimizer": { "enabled": true, "runs": 100 },
+    "evmVersion": "cancun",
+    "note": "impl 12457 B. Conclusion: workspace == as-deployed == live."
+  },
+  "whatItIs": "A private, VY-hardcoded basket DEX: every pool is VY/<asset>, one shared VDAX LP token across all pools. Permissioned swaps (swapExactIn, onlySwapWhitelisted, constant-product VY/asset, value-conserving). NEW in this version: RESERVE_OFFICER_ROLE (held only by VRYO) gating two ASSET-ONLY primitives -- reserveInjectAsset(poolId,assetAmount) adds to pool.reserveAsset (VY leg untouched, NO VDAX minted -> existing holders own more asset pro-rata) and reserveExtractAsset(poolId,assetAmount,recipient) pulls asset (reverts if > reserveAsset, NO VDAX burned, pool never removed). These let VRYO deploy/recall reserve depth without a forced VY sale or VDAX mint; the MEV bot rebalances any price drift. Pre-existing admin LP ops (adminInjectLiquidity/adminExtractLiquidity, pro-rata both legs, mint/burn VDAX) unchanged.",
+  "fundFlow": {
+    "swap": "swapExactIn: whitelisted caller, VY<->asset constant-product, output -> recipient (value-conserving, k preserved). UNCHANGED from prior audit.",
+    "reserveOfficer": "reserveInjectAsset: VRYO -> pool.reserveAsset (asset in). reserveExtractAsset: pool.reserveAsset -> recipient (VRYO hardcodes VRT). ASSET-ONLY, VY reserve never touched, no VDAX mint/burn.",
+    "admin": "adminInjectLiquidity/adminExtractLiquidity (pro-rata both legs, mint/burn VDAX); updateSwapWhitelist; addPool; _authorizeUpgrade.",
+    "drainLevers": "DAX pool ASSET reserves are drainable by: (1) ADMIN via adminExtractLiquidity (pro-rata, arbitrary recipient) -- pre-existing; (2) RESERVE_OFFICER (VRYO-only) via reserveExtractAsset (asset-only, arbitrary recipient). VY reserves drainable only by ADMIN (adminExtract) or value-conserving swaps."
+  },
+  "liveConfig": {
+    "admin": "DEFAULT_ADMIN + ADMIN = KMS 0x8310eA7E",
+    "roles": "RESERVE_OFFICER_ROLE held ONLY by VRYO 0xA95749f5 (KMS does NOT hold it). swap-whitelist {VBBO,VAO,VEO,SR,VGO,MEV bot}.",
+    "vlmRemoved": "VLM 0x920AbB09 holds ZERO roles on the DAX (RESERVE_OFFICER=false, swapWhitelist=false, ADMIN=false) -- fully disconnected, consistent with its elimination across VRT/VCO too."
+  }
+}

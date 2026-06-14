@@ -3,18 +3,32 @@ pragma solidity 0.8.27;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {
+    UUPSUpgradeable
+} from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
+import {
+    Initializable
+} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+import {
     ReentrancyGuardTransient
 } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {
     SafeERC20
 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ValinityToken} from "../token/ValinityToken.sol";
-import {ValinityYieldTreasury} from "../treasury/ValinityYieldTreasury.sol";
 import {ValinityReserveTreasury} from "../treasury/ValinityReserveTreasury.sol";
 import {ValinityCapOfficer} from "../officer/ValinityCapOfficer.sol";
+import {IKeeperRewards} from "../interfaces/IKeeperRewards.sol";
 
-/// @notice Balancer V2 Vault flash loan interface
+// ─────────────────────────────────────────────────────────────────────────────
+// EXTERNAL INTERFACES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// @notice Permissionless rebalance entry on the Reserve Yield Officer.
+interface IValinityReserveYieldOfficer {
+    function execute() external;
+}
+
+/// @notice Balancer V2 Vault — 0% fee flash loans
 interface IBalancerVault {
     function flashLoan(
         address recipient,
@@ -24,7 +38,6 @@ interface IBalancerVault {
     ) external;
 }
 
-/// @notice Callback interface for Balancer V2 flash loans
 interface IFlashLoanRecipient {
     function receiveFlashLoan(
         IERC20[] memory tokens,
@@ -34,132 +47,174 @@ interface IFlashLoanRecipient {
     ) external;
 }
 
+/// @notice Uniswap V2 Router02 — for the open-market VY/USDC pool
+interface IUniswapV2Router02 {
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to,
+        uint256 deadline
+    ) external returns (uint256[] memory amounts);
+}
+
+/// @notice Uniswap V3 Factory — used to resolve pool addresses per fee tier
+interface IUniswapV3Factory {
+    function getPool(
+        address tokenA,
+        address tokenB,
+        uint24 fee
+    ) external view returns (address pool);
+}
+
+/// @notice Uniswap V3 SwapRouter02 (no deadline)
+interface ISwapRouter02 {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountOut);
+}
+
+/// @notice Uniswap V3 QuoterV2 — simulates a swap and reports output
+interface IQuoterV2 {
+    struct QuoteExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint256 amountIn;
+        uint24 fee;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function quoteExactInputSingle(QuoteExactInputSingleParams memory params)
+        external
+        returns (
+            uint256 amountOut,
+            uint160 sqrtPriceX96After,
+            uint32 initializedTicksCrossed,
+            uint256 gasEstimate
+        );
+}
+
 /**
  * @title ValinityFloorOfficer
- * @notice Arbitrages VY price below its LTV-F floor via flash-loaned capital
- * @dev "Dumb" design — backend provides swap instructions, contract enforces invariants.
+ * @notice Permissionless, closed-circuit VY floor defense.
+ * @dev    Single button — `executeFloor(uint256 flashAmount)` — anyone can call,
+ *         caller pays gas. UUPS upgradeable; ADMIN_ROLE only.
  *
- *      Atomic flow (single transaction via Balancer V2 flash loan):
- *      1) Operator calls initiateFloor() with flash loan amount + instructions
- *      2) Balancer sends USDC to this contract, triggers receiveFlashLoan()
- *      3) Buy VY with flash-loaned USDC via whitelisted routers
- *      4) Send ALL VY to VYT (the X for the three-way lock)
- *      5) Decrease caps on VCO — sum(capReductions) must == VY sent to VYT
- *      6) Withdraw assets from VRT at exact on-chain LTV per asset
- *         (contract computes: withdrawAmount = capReduction × reserve / cap)
- *      7) Swap withdrawn assets → USDC via whitelisted routers
- *      8) Repay Balancer flash loan (exact amount, 0% fee)
- *      9) Convert remaining USDC profit → VY via whitelisted routers
- *     10) Send ALL profit VY to profitRecipient (BuybackOfficer)
- *     11) Enforce clean state: all token balances == 0
+ *         Per-call flow (atomic, inside one Balancer V2 flash loan):
+ *           1. Caller passes a USDC flashAmount.
+ *           2. Balancer sends `flashAmount` USDC → receiveFlashLoan.
+ *           3. Buy VY on Uniswap V2 (USDC/VY public pool) with that USDC.
+ *           4. Identify largest-cap asset on VCO (= farthest from floor).
+ *              vyAmount must fit within that asset's headroom; revert if not.
+ *           5. Transfer vyAmount VY → VYT (burned from circulation).
+ *           6. withdrawAmount = vyAmount × reserve / cap  (exact on-chain LTV).
+ *              Pull `withdrawAmount` of `asset` from VRT.
+ *           7. vco.decreaseAssetCap(asset, vyAmount) (exact same amount).
+ *           8. Sell `asset` → USDC on the deepest Uniswap V3 pool, picked
+ *              automatically by scanning the 4 standard fee tiers via QuoterV2.
+ *           9. Repay flash loan to Balancer (revert if insufficient — this is
+ *              the natural self-protection against bad `flashAmount`).
+ *          10. If excess USDC remains, buy more VY on Uniswap V2 and forward
+ *              the whole VY balance to the Buyback Officer. If no excess,
+ *              do nothing — the floor was defended either way.
  *
- *      Hardcoded invariants (community-verifiable):
- *      - Only operator can trigger, only Balancer Vault can call callback
- *      - VY sent to VYT BEFORE any withdrawals
- *      - sum(capReductions) == VY sent to VYT (three-way lock)
- *      - Withdrawals computed at exact on-chain LTV (contract calculates)
- *      - Cap floors enforced by VCO itself (reverts if cap < floor)
- *      - Swaps only through admin-whitelisted routers
- *      - Flash loan fully repaid (Balancer enforces atomically)
- *      - ALL profit VY → profitRecipient (cannot be diverted)
- *      - Clean state: all balances zero at end
+ *         Hardcoded routing (no caller params for swaps, no router whitelist):
+ *           Balancer ── USDC ──▶ this ── USDC ──▶ Uni V2 ── VY ──▶ this
+ *           VRT      ── asset ─▶ this ── asset ─▶ Uni V3 ── USDC ─▶ this ─▶ Balancer
+ *           (excess) USDC ──▶ Uni V2 ── VY ──▶ this ── VY ──▶ Buyback Officer
+ *
+ *         Self-protection on `flashAmount`:
+ *           - Too large: V3 sell can't cover repayment → revert.
+ *           - Too large for headroom: vyAmount > headroom → revert.
+ *           - Above floor: VY costs more than collateral redeems → repay fails.
+ *           Caller eats gas on a bad call; protocol state is untouched.
+ *
+ *         Admin-only knobs:
+ *           - `setBuybackOfficer`, `setBalancerVault`, `setV2Router`,
+ *             `setV3Factory`, `setV3Router`, `setV3Quoter`, `setUsdc`,
+ *             `setPaused`, `rescueToken`, `upgradeToAndCall`.
  */
 contract ValinityFloorOfficer is
+    UUPSUpgradeable,
     AccessControl,
     ReentrancyGuardTransient,
+    Initializable,
     IFlashLoanRecipient
 {
     using SafeERC20 for IERC20;
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // ROLES
+    // ROLES / CONSTANTS
     // ═══════════════════════════════════════════════════════════════════════════
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
+    /// @dev Transient slot guarding the Balancer flash callback.
+    bytes32 private constant _IN_FLASH_LOAN_SLOT =
+        keccak256("valinity.vfo.inFlashLoan");
+
     // ═══════════════════════════════════════════════════════════════════════════
-    // STATE VARIABLES
+    // STATE (upgrade-safe layout)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @notice VY Token reference
-    ValinityToken public immutable vyToken;
+    // -- Valinity system --
+    IERC20 public vyToken;
+    address public vyt;
+    ValinityReserveTreasury public vrt;
+    ValinityCapOfficer public vco;
+    address public buybackOfficer; // profit recipient (VBBO)
+    IValinityReserveYieldOfficer public vryo;
 
-    /// @notice VYT (Valinity Yield Treasury) — receives VY
-    ValinityYieldTreasury public immutable vyt;
+    /// @notice Keeper-reward engine (VGO). address(0) disables keeper refunds —
+    ///         the floor defense still works, the caller just isn't reimbursed.
+    IKeeperRewards public vgo;
 
-    /// @notice Reserve Treasury — assets withdrawn from
-    ValinityReserveTreasury public immutable vrt;
+    // -- External venues --
+    IBalancerVault public balancerVault;
+    IUniswapV2Router02 public v2Router;
+    IUniswapV3Factory public v3Factory;
+    ISwapRouter02 public v3Router;
+    IQuoterV2 public v3Quoter;
+    address public usdc;
 
-    /// @notice Cap Officer — caps decreased on
-    ValinityCapOfficer public immutable vco;
-
-    /// @notice Balancer V2 Vault — flash loan source
-    IBalancerVault public immutable balancerVault;
-
-    /// @notice USDC token address
-    address public immutable usdcAddress;
-
-    /// @notice Backend operator wallet
-    address public operator;
-
-    /// @notice Profit recipient (BuybackOfficer)
-    address public profitRecipient;
-
-    /// @notice Emergency pause flag
+    // -- Control --
     bool public execPaused;
 
-    /// @notice Transient storage slot for flash loan callback guard
-    /// @dev Uses tstore/tload (100 gas each) instead of SSTORE (~20,000 gas)
-    /// keccak256("ValinityFloorOfficer._inFlashLoan")
-    uint256 private constant _IN_FLASH_LOAN_SLOT =
-        0xc1b14fbf86bbd1247a7d7f6c07774230e7f4c0d947f8fdfd821f54ba1f37fbcc;
-
-    /// @notice Admin-approved router contracts for swaps
-    mapping(address => bool) public whitelistedRouters;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // STRUCTS
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @notice Which asset cap to reduce (contract computes withdrawal amount)
-    struct WithdrawalInstruction {
-        address asset;        // reserve asset in VRT
-        uint256 capReduction; // VY amount to reduce cap by (18 dec)
-    }
-
-    /// @notice Swap instruction via a whitelisted router
-    struct SwapStep {
-        address router;   // must be in whitelistedRouters
-        address tokenIn;  // token being spent
-        address tokenOut; // token expected back (balance verified)
-        bytes callData;   // encoded call (e.g., swap)
-    }
-
-    /// @notice Encoded parameters passed through flash loan userData
-    struct FloorParams {
-        WithdrawalInstruction[] withdrawals;
-        SwapStep[] buySwaps;
-        SwapStep[] sellSwaps;
-        SwapStep[] profitSwaps;
-    }
-
+    /// @dev Reserved storage for future upgrades.
+    uint256[43] private __gap; // 44 -> 43: vgo consumed one slot
     // ═══════════════════════════════════════════════════════════════════════════
     // EVENTS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    event OperatorUpdated(address indexed newOperator);
-    event ProfitRecipientUpdated(address indexed newRecipient);
+    event BuybackOfficerUpdated(address indexed newBuybackOfficer);
+    event VryoUpdated(address indexed newVryo);
+    event VgoUpdated(address indexed newVgo);
+    event KeeperRewardFailed(bytes reason);
+    event BalancerVaultUpdated(address indexed newVault);
+    event V2RouterUpdated(address indexed newRouter);
+    event V3FactoryUpdated(address indexed newFactory);
+    event V3RouterUpdated(address indexed newRouter);
+    event V3QuoterUpdated(address indexed newQuoter);
+    event UsdcUpdated(address indexed newUsdc);
     event Paused(bool execPaused);
-    event RouterWhitelisted(address indexed router, bool approved);
-    event AssetWithdrawn(
-        address indexed asset,
-        uint256 amount,
-        uint256 capReduction
-    );
     event FloorExecuted(
-        address indexed operator,
+        address indexed caller,
         uint256 flashAmount,
-        uint256 vyToVYT,
+        address indexed asset,
+        uint256 vyBurned,
+        uint256 assetWithdrawn,
+        uint24 sellFeeTier,
         uint256 profitVY,
         uint256 timestamp
     );
@@ -171,395 +226,418 @@ contract ValinityFloorOfficer is
     error InvalidAddress();
     error InvalidAmount();
     error ExecutionPaused();
-    error UnauthorizedOperator();
     error UnauthorizedCaller();
-    error DeadlineExpired();
-    error CapReductionMismatch();
-    error RouterNotWhitelisted();
-    error SwapOutputZero();
-    error TokenBalanceNotZero(address token);
-    error FinalSwapMustOutputVY();
-    error NoSwapSteps();
     error FlashLoanReentrancy();
+    error NoHeadroom();
+    error VyExceedsHeadroom(uint256 vyAmount, uint256 headroom);
+    error NoV3PoolFound(address asset);
+    error TokenBalanceNotZero(address token);
+    error VyBuyReturnedZero();
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // CONSTRUCTOR
+    // INITIALIZER / UPGRADE
     // ═══════════════════════════════════════════════════════════════════════════
 
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
         address vyTokenAddress,
         address vytAddress,
         address vrtAddress,
         address vcoAddress,
+        address buybackOfficerAddress,
         address balancerVaultAddress,
-        address usdcAddr,
-        address operatorAddress,
-        address profitRecipientAddress,
-        address adminAddress
-    ) {
+        address v2RouterAddress,
+        address v3FactoryAddress,
+        address v3RouterAddress,
+        address v3QuoterAddress,
+        address usdcAddress,
+        address adminAddress,
+        address vryoAddress
+    ) public initializer {
         if (vyTokenAddress == address(0)) revert InvalidAddress();
         if (vytAddress == address(0)) revert InvalidAddress();
         if (vrtAddress == address(0)) revert InvalidAddress();
         if (vcoAddress == address(0)) revert InvalidAddress();
+        if (buybackOfficerAddress == address(0)) revert InvalidAddress();
         if (balancerVaultAddress == address(0)) revert InvalidAddress();
-        if (usdcAddr == address(0)) revert InvalidAddress();
-        if (operatorAddress == address(0)) revert InvalidAddress();
-        if (profitRecipientAddress == address(0)) revert InvalidAddress();
+        if (v2RouterAddress == address(0)) revert InvalidAddress();
+        if (v3FactoryAddress == address(0)) revert InvalidAddress();
+        if (v3RouterAddress == address(0)) revert InvalidAddress();
+        if (v3QuoterAddress == address(0)) revert InvalidAddress();
+        if (usdcAddress == address(0)) revert InvalidAddress();
         if (adminAddress == address(0)) revert InvalidAddress();
+        if (vryoAddress == address(0)) revert InvalidAddress();
 
-        vyToken = ValinityToken(vyTokenAddress);
-        vyt = ValinityYieldTreasury(vytAddress);
+        vyToken = IERC20(vyTokenAddress);
+        vyt = vytAddress;
         vrt = ValinityReserveTreasury(vrtAddress);
         vco = ValinityCapOfficer(vcoAddress);
+        buybackOfficer = buybackOfficerAddress;
+
         balancerVault = IBalancerVault(balancerVaultAddress);
-        usdcAddress = usdcAddr;
-        operator = operatorAddress;
-        profitRecipient = profitRecipientAddress;
+        v2Router = IUniswapV2Router02(v2RouterAddress);
+        v3Factory = IUniswapV3Factory(v3FactoryAddress);
+        v3Router = ISwapRouter02(v3RouterAddress);
+        v3Quoter = IQuoterV2(v3QuoterAddress);
+        usdc = usdcAddress;
+        vryo = IValinityReserveYieldOfficer(vryoAddress);
 
         _grantRole(DEFAULT_ADMIN_ROLE, adminAddress);
         _grantRole(ADMIN_ROLE, adminAddress);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // MODIFIERS
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    modifier onlyOperator() {
-        if (msg.sender != operator) revert UnauthorizedOperator();
-        _;
-    }
+    /// @dev UUPS gate: only ADMIN_ROLE can push a new implementation.
+    function _authorizeUpgrade(address) internal override onlyRole(ADMIN_ROLE) {}
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // MAIN ENTRY POINT (operator calls this)
+    // MAIN ENTRY — PERMISSIONLESS, ONE ARG
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Initiate floor arbitrage via Balancer V2 flash loan
-     * @dev Operator provides flash loan amount + all swap/withdrawal instructions.
-     *      Balancer sends USDC, calls receiveFlashLoan(), pulls USDC back.
-     *      Entire arb happens atomically inside the callback.
-     *
-     * @param flashAmount USDC to flash loan (6 decimals)
-     * @param withdrawals Which assets to withdraw and their cap reductions
-     * @param buySwaps Swap instructions: USDC → VY
-     * @param sellSwaps Swap instructions: withdrawn assets → USDC
-     * @param profitSwaps Swap instructions: remaining USDC → VY (profit)
-     * @param deadline Prevents stale execution
+     * @notice Defend the VY floor with one Balancer flash loan.
+     * @param  flashAmount  USDC to flash-borrow (6 decimals).
+     *                      Caller picks. Atomic repay protects against bad sizing.
      */
-    function initiateFloor(
-        uint256 flashAmount,
-        WithdrawalInstruction[] calldata withdrawals,
-        SwapStep[] calldata buySwaps,
-        SwapStep[] calldata sellSwaps,
-        SwapStep[] calldata profitSwaps,
-        uint256 deadline
-    ) external onlyOperator nonReentrant {
-        // ─────────────────────────────────────────────────────────────────────
-        // CHECKS
-        // ─────────────────────────────────────────────────────────────────────
+    function executeFloor(uint256 flashAmount) external nonReentrant {
         if (execPaused) revert ExecutionPaused();
-        if (block.timestamp > deadline) revert DeadlineExpired();
         if (flashAmount == 0) revert InvalidAmount();
-        if (buySwaps.length == 0) revert NoSwapSteps();
-        if (sellSwaps.length == 0) revert NoSwapSteps();
 
-        // ─────────────────────────────────────────────────────────────────────
-        // ENCODE PARAMS & REQUEST FLASH LOAN
-        // ─────────────────────────────────────────────────────────────────────
-        bytes memory userData = abi.encode(
-            FloorParams({
-                withdrawals: withdrawals,
-                buySwaps: buySwaps,
-                sellSwaps: sellSwaps,
-                profitSwaps: profitSwaps
-            })
-        );
+        // Arm the keeper reward: snapshot gas on the VGO. Best-effort — if the
+        // VGO is unset, or VFO lacks OFFICER_ROLE / an enabled officer config on
+        // it, this must NOT brick the floor defense, so it is wrapped. payReward
+        // (at the end) only fires if arming succeeded.
+        IKeeperRewards _vgo = vgo;
+        bool _rewardArmed;
+        if (address(_vgo) != address(0)) {
+            try _vgo.beginReward() {
+                _rewardArmed = true;
+            } catch {}
+        }
+
+        // Set transient flash-loan guard
+        bytes32 slot = _IN_FLASH_LOAN_SLOT;
+        assembly { tstore(slot, 1) }
 
         address[] memory tokens = new address[](1);
-        tokens[0] = usdcAddress;
-
+        tokens[0] = usdc;
         uint256[] memory amounts = new uint256[](1);
         amounts[0] = flashAmount;
 
-        // Set flash loan guard (transient storage — 100 gas vs 20,000 SSTORE)
-        assembly { tstore(_IN_FLASH_LOAN_SLOT, 1) }
+        // Pass the caller through userData so the callback can log it
+        // without resorting to tx.origin.
+        balancerVault.flashLoan(
+            address(this),
+            tokens,
+            amounts,
+            abi.encode(msg.sender)
+        );
 
-        // Balancer sends USDC → calls receiveFlashLoan() → pulls USDC back
-        balancerVault.flashLoan(address(this), tokens, amounts, userData);
+        // Clear guard
+        assembly { tstore(slot, 0) }
 
-        // Clear flash loan guard
-        assembly { tstore(_IN_FLASH_LOAN_SLOT, 0) }
+        // Pay the keeper via the VGO (gas refund + flat bonus in VGC, from VGO
+        // funds). Best-effort: a VGO failure must never brick the floor defense —
+        // the floor already settled atomically inside the flash callback.
+        if (_rewardArmed) {
+            try _vgo.payReward(msg.sender) {} catch (bytes memory reason) {
+                emit KeeperRewardFailed(reason);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // FLASH LOAN CALLBACK (called ONLY by Balancer Vault)
+    // BALANCER FLASH CALLBACK — runs the whole cycle
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * @notice Balancer V2 flash loan callback — executes the full arb
-     * @dev Called by Balancer Vault after sending USDC. Must leave enough
-     *      USDC in contract for Balancer to pull back (flashAmount + fee).
-     *      Fee is 0 on Balancer V2.
-     */
     function receiveFlashLoan(
-        IERC20[] memory,
+        IERC20[] memory /* tokens */,
         uint256[] memory amounts,
         uint256[] memory feeAmounts,
         bytes memory userData
     ) external override {
-        // ─────────────────────────────────────────────────────────────────────
-        // SECURITY: Only Balancer Vault can call, and only during our flash loan
-        // ─────────────────────────────────────────────────────────────────────
-        if (msg.sender != address(balancerVault)) revert UnauthorizedCaller();
-        bool _isInFlashLoan;
-        assembly { _isInFlashLoan := tload(_IN_FLASH_LOAN_SLOT) }
-        if (!_isInFlashLoan) revert FlashLoanReentrancy();
+        // ---- Gates ----
+        IBalancerVault _vault = balancerVault;
+        if (msg.sender != address(_vault)) revert UnauthorizedCaller();
+        bytes32 slot = _IN_FLASH_LOAN_SLOT;
+        uint256 active;
+        assembly { active := tload(slot) }
+        if (active == 0) revert FlashLoanReentrancy();
 
-        // Decode parameters
-        FloorParams memory params = abi.decode(userData, (FloorParams));
+        address caller_ = abi.decode(userData, (address));
         uint256 flashAmount = amounts[0];
-        uint256 flashFee = feeAmounts[0];
-        uint256 repayAmount = flashAmount + flashFee;
+        uint256 repayAmount = flashAmount + feeAmounts[0]; // Balancer V2 fee = 0
 
-        // Cache storage reads
-        address _profitRecipient = profitRecipient;
-        IERC20 _vyToken = IERC20(address(vyToken));
-        address _usdcAddress = usdcAddress;
+        // Cache state references once
+        IERC20 _vyToken = vyToken;
+        address _vyt = vyt;
+        ValinityReserveTreasury _vrt = vrt;
+        ValinityCapOfficer _vco = vco;
+        IUniswapV2Router02 _v2Router = v2Router;
+        address _usdc = usdc;
+        address _buyback = buybackOfficer;
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 1: BUY VY WITH FLASH-LOANED USDC
-        // ─────────────────────────────────────────────────────────────────────
-        _executeSwaps(params.buySwaps);
+        // ---- 1. Buy VY on Uniswap V2 with flash USDC ----
+        uint256 vyAmount = _buyVYonV2(_v2Router, _usdc, _vyToken, flashAmount);
+        if (vyAmount == 0) revert VyBuyReturnedZero();
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 2: RECORD VY AMOUNT (the X for the three-way lock)
-        // ─────────────────────────────────────────────────────────────────────
-        uint256 vyAmount = _vyToken.balanceOf(address(this));
+        // ---- 2. Pick the asset with the largest cap on VCO ----
+        //         headroom == 0 also implies asset == address(0).
+        (address asset, uint256 headroom, uint256 cap) = _findBestAsset(_vco);
+        if (headroom == 0) revert NoHeadroom();
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 3: MOVE 1 — SEND ALL VY TO VYT
-        // ─────────────────────────────────────────────────────────────────────
-        _vyToken.safeTransfer(address(vyt), vyAmount);
+        // ---- 3. vyAmount must fit within that asset's headroom ----
+        //         (else cap-decrease would drop below floor → revert)
+        if (vyAmount > headroom) revert VyExceedsHeadroom(vyAmount, headroom);
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 4: MOVES 2 & 3 — VALIDATE, COMPUTE, WITHDRAW, DECREASE CAPS
-        // ─────────────────────────────────────────────────────────────────────
-        uint256 wLen = params.withdrawals.length;
-        address[] memory assets = new address[](wLen);
-        uint256[] memory withdrawAmounts = new uint256[](wLen);
-        uint256 totalCapReduction;
+        // ---- 4. Compute exact LTV withdrawal (fail-fast before the burn) ----
+        uint256 reserve = IERC20(asset).balanceOf(address(_vrt));
+        uint256 withdrawAmount = (vyAmount * reserve) / cap;
+        if (withdrawAmount == 0) revert InvalidAmount();
 
-        for (uint256 i; i < wLen; ) {
-            address asset = params.withdrawals[i].asset;
-            uint256 capReduction = params.withdrawals[i].capReduction;
+        // ---- 5. Burn vyAmount to VYT ----
+        _vyToken.safeTransfer(_vyt, vyAmount);
 
-            if (asset == address(0)) revert InvalidAddress();
-            if (capReduction == 0) revert InvalidAmount();
+        // Snapshot pre-asset balance for the closed-circuit delta check
+        uint256 preAssetBal = IERC20(asset).balanceOf(address(this));
 
-            // Read current on-chain state
-            uint256 reserve = IERC20(asset).balanceOf(address(vrt));
-            uint256 cap = vco.getAssetCap(asset);
-            if (cap == 0) revert InvalidAmount();
+        // ---- 6. Withdraw asset from VRT ----
+        address[] memory wAssets = new address[](1);
+        uint256[] memory wAmounts = new uint256[](1);
+        wAssets[0] = asset;
+        wAmounts[0] = withdrawAmount;
+        _vrt.withdrawForBuyback(wAssets, wAmounts, address(this));
 
-            // Contract computes exact withdrawal at current LTV
-            // LTV = reserve / cap → withdrawAmount = capReduction × reserve / cap
-            uint256 withdrawAmount = (capReduction * reserve) / cap;
-            if (withdrawAmount == 0) revert InvalidAmount();
+        // ---- 7. Decrease cap on VCO by exactly vyAmount ----
+        _vco.decreaseAssetCap(asset, vyAmount);
 
-            assets[i] = asset;
-            withdrawAmounts[i] = withdrawAmount;
-            totalCapReduction += capReduction;
+        // ---- 8. Sell asset → USDC on the deepest V3 pool (auto-pick fee) ----
+        (uint24 sellFee, ) = _swapAssetToUSDCv3(asset, _usdc, withdrawAmount);
 
-            emit AssetWithdrawn(asset, withdrawAmount, capReduction);
-
-            unchecked { ++i; }
+        // ---- Closed-circuit invariant: no NEW residual collateral ----
+        if (IERC20(asset).balanceOf(address(this)) > preAssetBal) {
+            revert TokenBalanceNotZero(asset);
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 4.1: THREE-WAY LOCK — EVERY VY MUST BE ACCOUNTED FOR
-        // ─────────────────────────────────────────────────────────────────────
-        if (totalCapReduction != vyAmount) revert CapReductionMismatch();
+        // ---- 9. Repay Balancer (natural revert on bad flashAmount) ----
+        IERC20(_usdc).safeTransfer(address(_vault), repayAmount);
 
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 5: WITHDRAW FROM VRT + REDUCE CAPS ON VCO
-        // ─────────────────────────────────────────────────────────────────────
-        vrt.withdrawForBuyback(assets, withdrawAmounts, address(this));
-
-        for (uint256 i; i < wLen; ) {
-            vco.decreaseAssetCap(
-                params.withdrawals[i].asset,
-                params.withdrawals[i].capReduction
-            );
-            unchecked { ++i; }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 6: SELL WITHDRAWN ASSETS → USDC
-        // ─────────────────────────────────────────────────────────────────────
-        _executeSwaps(params.sellSwaps);
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 7: REPAY FLASH LOAN
-        // ─────────────────────────────────────────────────────────────────────
-        IERC20(_usdcAddress).safeTransfer(
-            address(balancerVault),
-            repayAmount
-        );
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 8: CONVERT REMAINING USDC PROFIT → VY
-        // ─────────────────────────────────────────────────────────────────────
-        if (params.profitSwaps.length > 0) {
-            // Last profit swap MUST output VY
-            if (
-                params.profitSwaps[params.profitSwaps.length - 1].tokenOut !=
-                address(vyToken)
-            ) {
-                revert FinalSwapMustOutputVY();
+        // ---- 10. If excess USDC, buy more VY on V2 and forward to BBO ----
+        uint256 leftover = IERC20(_usdc).balanceOf(address(this));
+        uint256 profitVY;
+        if (leftover > 0) {
+            profitVY = _buyVYonV2(_v2Router, _usdc, _vyToken, leftover);
+            if (profitVY > 0) {
+                _vyToken.safeTransfer(_buyback, profitVY);
             }
-            _executeSwaps(params.profitSwaps);
         }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 9: SEND ALL PROFIT VY TO BUYBACK OFFICER
-        // ─────────────────────────────────────────────────────────────────────
-        uint256 profitVY = _vyToken.balanceOf(address(this));
-        if (profitVY > 0) {
-            _vyToken.safeTransfer(_profitRecipient, profitVY);
-        }
-
-        // ─────────────────────────────────────────────────────────────────────
-        // STEP 10: ENFORCE CLEAN STATE
-        // ─────────────────────────────────────────────────────────────────────
-
-        // All withdrawn assets must be fully converted (zero remaining)
-        for (uint256 i; i < wLen; ) {
-            if (IERC20(assets[i]).balanceOf(address(this)) != 0) {
-                revert TokenBalanceNotZero(assets[i]);
-            }
-            unchecked { ++i; }
-        }
-
-        // USDC must be zero (flash loan repaid + profit converted)
-        if (IERC20(_usdcAddress).balanceOf(address(this)) != 0) {
-            revert TokenBalanceNotZero(_usdcAddress);
-        }
-
-        // VY must be zero (all profit sent to recipient)
-        if (_vyToken.balanceOf(address(this)) != 0) {
-            revert TokenBalanceNotZero(address(vyToken));
-        }
-
-        // All swap intermediates must be zero (covers multi-hop routes)
-        _checkSwapIntermediates(params.buySwaps, _usdcAddress);
-        _checkSwapIntermediates(params.sellSwaps, _usdcAddress);
-        _checkSwapIntermediates(params.profitSwaps, _usdcAddress);
 
         emit FloorExecuted(
-            operator,
+            caller_,
             flashAmount,
+            asset,
             vyAmount,
+            withdrawAmount,
+            sellFee,
             profitVY,
             block.timestamp
         );
+
+        // ---- 11. Trigger VRYO rebalance in the same transaction ----
+        IValinityReserveYieldOfficer _vryo = vryo;
+        if (address(_vryo) != address(0)) _vryo.execute();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // INTERNAL SWAP EXECUTOR
+    // INTERNAL HELPERS
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function _executeSwaps(SwapStep[] memory swaps) internal {
-        uint256 sLen = swaps.length;
-        for (uint256 i; i < sLen; ) {
-            SwapStep memory step = swaps[i];
-
-            if (!whitelistedRouters[step.router]) {
-                revert RouterNotWhitelisted();
-            }
-
-            // Approve full tokenIn balance to whitelisted router
-            uint256 tokenInBal = IERC20(step.tokenIn).balanceOf(address(this));
-            IERC20(step.tokenIn).forceApprove(step.router, tokenInBal);
-
-            // Snapshot tokenOut balance before swap
-            uint256 outBefore = IERC20(step.tokenOut).balanceOf(address(this));
-
-            // Execute swap — bubbles up revert reason on failure
-            (bool ok, bytes memory returnData) = step.router.call(
-                step.callData
-            );
-            if (!ok) {
-                assembly {
-                    revert(add(returnData, 32), mload(returnData))
+    /**
+     * @dev Asset with the largest collateral cap on VCO. Because the effective
+     *      floor is uniform across all assets, "largest cap" == "largest
+     *      headroom". Returns (0, 0, 0) if every asset is at the floor.
+     */
+    function _findBestAsset(ValinityCapOfficer _vco)
+        internal
+        view
+        returns (address bestAsset, uint256 bestHeadroom, uint256 bestCap)
+    {
+        address[] memory assets_ = _vco.getAssets();
+        uint256 floor = _vco.effectiveFloor();
+        uint256 len = assets_.length;
+        for (uint256 i; i < len; ) {
+            address a = assets_[i];
+            uint256 c = _vco.getAssetCap(a);
+            if (c > floor) {
+                uint256 h;
+                unchecked { h = c - floor; }
+                if (h > bestHeadroom) {
+                    bestHeadroom = h;
+                    bestAsset = a;
+                    bestCap = c;
                 }
             }
-
-            // Output MUST have landed in this contract
-            if (IERC20(step.tokenOut).balanceOf(address(this)) <= outBefore) {
-                revert SwapOutputZero();
-            }
-
             unchecked { ++i; }
         }
     }
 
-    /// @dev Verify all intermediate tokens from a swap phase have zero balance
-    /// @param swaps Swap steps to check
-    /// @param excludeToken Token already checked explicitly (USDC)
-    function _checkSwapIntermediates(
-        SwapStep[] memory swaps,
-        address excludeToken
-    ) internal view {
-        address _vyAddr = address(vyToken);
-        uint256 len = swaps.length;
-        for (uint256 i; i < len; ) {
-            address tokenIn = swaps[i].tokenIn;
-            address tokenOut = swaps[i].tokenOut;
-            if (
-                tokenIn != excludeToken &&
-                tokenIn != _vyAddr &&
-                IERC20(tokenIn).balanceOf(address(this)) != 0
-            ) {
-                revert TokenBalanceNotZero(tokenIn);
-            }
-            if (
-                tokenOut != excludeToken &&
-                tokenOut != _vyAddr &&
-                IERC20(tokenOut).balanceOf(address(this)) != 0
-            ) {
-                revert TokenBalanceNotZero(tokenOut);
+    /// @dev Buy VY with USDC on the Uniswap V2 USDC/VY public pool.
+    function _buyVYonV2(
+        IUniswapV2Router02 _router,
+        address _usdc,
+        IERC20 _vyToken,
+        uint256 usdcIn
+    ) internal returns (uint256 vyOut) {
+        IERC20(_usdc).forceApprove(address(_router), usdcIn);
+
+        address[] memory path = new address[](2);
+        path[0] = _usdc;
+        path[1] = address(_vyToken);
+
+        uint256 balBefore = _vyToken.balanceOf(address(this));
+        // amountOutMin = 0 — atomic repay enforces overall profitability.
+        _router.swapExactTokensForTokens(
+            usdcIn,
+            0,
+            path,
+            address(this),
+            block.timestamp
+        );
+        vyOut = _vyToken.balanceOf(address(this)) - balBefore;
+    }
+
+    /**
+     * @dev Sell `asset` for USDC on Uniswap V3, picking the deepest of the
+     *      4 standard fee tiers {0.01%, 0.05%, 0.30%, 1.00%} via QuoterV2.
+     *      Reverts if no V3 pool exists for the asset.
+     */
+    function _swapAssetToUSDCv3(
+        address asset,
+        address _usdc,
+        uint256 amountIn
+    ) internal returns (uint24 bestFee, uint256 usdcOut) {
+        IUniswapV3Factory _factory = v3Factory;
+        IQuoterV2 _quoter = v3Quoter;
+
+        uint24[4] memory feeTiers = [
+            uint24(100),
+            uint24(500),
+            uint24(3000),
+            uint24(10000)
+        ];
+
+        uint256 bestOut;
+        for (uint256 i; i < 4; ) {
+            uint24 fee = feeTiers[i];
+            address pool = _factory.getPool(asset, _usdc, fee);
+            if (pool != address(0)) {
+                try
+                    _quoter.quoteExactInputSingle(
+                        IQuoterV2.QuoteExactInputSingleParams({
+                            tokenIn: asset,
+                            tokenOut: _usdc,
+                            amountIn: amountIn,
+                            fee: fee,
+                            sqrtPriceLimitX96: 0
+                        })
+                    )
+                returns (uint256 q, uint160, uint32, uint256) {
+                    if (q > bestOut) {
+                        bestOut = q;
+                        bestFee = fee;
+                    }
+                } catch {
+                    // pool exists but quote failed (e.g., no in-range
+                    // liquidity for this size). Skip silently.
+                }
             }
             unchecked { ++i; }
         }
+        if (bestFee == 0) revert NoV3PoolFound(asset);
+
+        ISwapRouter02 _router = v3Router;
+        IERC20(asset).forceApprove(address(_router), amountIn);
+
+        usdcOut = _router.exactInputSingle(
+            ISwapRouter02.ExactInputSingleParams({
+                tokenIn: asset,
+                tokenOut: _usdc,
+                fee: bestFee,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: 0, // atomic repay = effective slippage gate
+                sqrtPriceLimitX96: 0
+            })
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // ADMIN FUNCTIONS
+    // ADMIN
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function setOperator(
-        address newOperator
-    ) external onlyRole(ADMIN_ROLE) {
-        if (newOperator == address(0)) revert InvalidAddress();
-        operator = newOperator;
-        emit OperatorUpdated(newOperator);
+    function setBuybackOfficer(address newBuyback)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        if (newBuyback == address(0)) revert InvalidAddress();
+        buybackOfficer = newBuyback;
+        emit BuybackOfficerUpdated(newBuyback);
     }
 
-    function setProfitRecipient(
-        address newRecipient
-    ) external onlyRole(ADMIN_ROLE) {
-        if (newRecipient == address(0)) revert InvalidAddress();
-        profitRecipient = newRecipient;
-        emit ProfitRecipientUpdated(newRecipient);
+    function setVryo(address newVryo) external onlyRole(ADMIN_ROLE) {
+        if (newVryo == address(0)) revert InvalidAddress();
+        vryo = IValinityReserveYieldOfficer(newVryo);
+        emit VryoUpdated(newVryo);
     }
 
-    function setRouterWhitelist(
-        address router,
-        bool approved
-    ) external onlyRole(ADMIN_ROLE) {
-        if (router == address(0)) revert InvalidAddress();
-        whitelistedRouters[router] = approved;
-        emit RouterWhitelisted(router, approved);
+    /// @notice Configure the keeper-reward engine (VGO). Pass `newVgo =
+    ///         address(0)` to disable keeper refunds. VFO must hold OFFICER_ROLE
+    ///         + an enabled officer config on the VGO for payReward to succeed.
+    function setVgo(address newVgo) external onlyRole(ADMIN_ROLE) {
+        vgo = IKeeperRewards(newVgo);
+        emit VgoUpdated(newVgo);
+    }
+
+    function setBalancerVault(address newVault)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
+        if (newVault == address(0)) revert InvalidAddress();
+        balancerVault = IBalancerVault(newVault);
+        emit BalancerVaultUpdated(newVault);
+    }
+
+    function setV2Router(address newRouter) external onlyRole(ADMIN_ROLE) {
+        if (newRouter == address(0)) revert InvalidAddress();
+        v2Router = IUniswapV2Router02(newRouter);
+        emit V2RouterUpdated(newRouter);
+    }
+
+    function setV3Factory(address newFactory) external onlyRole(ADMIN_ROLE) {
+        if (newFactory == address(0)) revert InvalidAddress();
+        v3Factory = IUniswapV3Factory(newFactory);
+        emit V3FactoryUpdated(newFactory);
+    }
+
+    function setV3Router(address newRouter) external onlyRole(ADMIN_ROLE) {
+        if (newRouter == address(0)) revert InvalidAddress();
+        v3Router = ISwapRouter02(newRouter);
+        emit V3RouterUpdated(newRouter);
+    }
+
+    function setV3Quoter(address newQuoter) external onlyRole(ADMIN_ROLE) {
+        if (newQuoter == address(0)) revert InvalidAddress();
+        v3Quoter = IQuoterV2(newQuoter);
+        emit V3QuoterUpdated(newQuoter);
+    }
+
+    function setUsdc(address newUsdc) external onlyRole(ADMIN_ROLE) {
+        if (newUsdc == address(0)) revert InvalidAddress();
+        usdc = newUsdc;
+        emit UsdcUpdated(newUsdc);
     }
 
     function setPaused(bool paused) external onlyRole(ADMIN_ROLE) {
@@ -567,13 +645,18 @@ contract ValinityFloorOfficer is
         emit Paused(paused);
     }
 
-    function rescueToken(
-        address token,
-        address to,
-        uint256 amount
-    ) external onlyRole(ADMIN_ROLE) {
+    /**
+     * @notice Admin rescue for tokens stranded by misconfiguration.
+     * @dev    VY is blocked — it must only flow to VYT (cycle) or to the
+     *         Buyback Officer (profit).
+     */
+    function rescueToken(address token, address to, uint256 amount)
+        external
+        onlyRole(ADMIN_ROLE)
+    {
         if (to == address(0)) revert InvalidAddress();
         if (amount == 0) revert InvalidAmount();
+        if (token == address(vyToken)) revert InvalidAddress();
         IERC20(token).safeTransfer(to, amount);
     }
 }

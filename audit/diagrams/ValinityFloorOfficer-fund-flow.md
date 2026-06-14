@@ -1,83 +1,76 @@
-# ValinityFloorOfficer (VFO) — Floor-Defense Flash Circuit · the VY-below-floor arbitrage sink
+# ValinityFloorOfficer (VFO) — Floor-Defense Flash Circuit · **RE-AUDIT (now PERMISSIONLESS UUPS)**
 
-Address `0x3d9d78CD…59D51` — **NON-PROXY, NON-UPGRADEABLE** (plain `AccessControl + ReentrancyGuardTransient`, constructor-set immutables; EIP-1967 impl slot empty; logic FROZEN — no UUPS, no `_authorizeUpgrade`). The **floor officer**: when VY trades below its on-chain LTV-F backing, it flash-borrows USDC, buys the cheap VY, retires it to VYT, releases the *exact pro-rata* collateral from VRT, sells it, repays the flash, and forwards any profit to the buyback officer. Source==live **PROVEN** (as-deployed source keccak `0xcf265d27…` == `deployment.metadata.sources[VFO].keccak`; 30/31 closure files byte-identical to git `8a8b795`/`.v1.bak`; `deployedBytecode` metadata IPFS `1220d0b9bbdd…` == live; all 6 immutables confirmed == correct system addresses).
+> ⚠️ **This OVERWRITES the prior VFO audit** (old addr `0x3d9d78CD…`, NON-PROXY/operator-gated). VFO was **migrated to a BRAND-NEW UUPS proxy `0x79A902864d0Bb88DD5497B9Bec593d2ffb937867`** → impl `0x33c3DD5c…` (10,853 B). All roles moved to the new proxy and **revoked from the old** (VRT.BUYBACK, VCO.OFFICER, VGO.OFFICER, VY-whitelist — verified on-chain). The redesign makes the officer **PERMISSIONLESS** (works like VBBO/VAO) with **HARDCODED routing** (no operator, no router whitelist, no caller-supplied calldata).
 
-> **OPERATOR-GATED, not permissionless.** Only `operator()` (`0x6B700Bd4`, backend EOA) may call `initiateFloor`. The operator supplies the flash size **and arbitrary swap calldata** (`SwapStep{router,tokenIn,tokenOut,callData}` run via `router.call`), constrained to an **admin-whitelisted router set** (live: only UniV2 Router02 + UniV3 SwapRouter).
->
-> **This is NOT the workspace version.** `contracts/officer/ValinityFloorOfficer.sol` (627ln, git `5d96a85`) is an undeployed UUPS *rewrite* with permissionless `executeFloor(uint256)` + hardcoded routing. Audit target = the live `8a8b795` operator-gated `initiateFloor` version.
+Proxy `0x79A9028…` → UUPS impl `0x33c3DD5c…`. The **floor officer**: when VY trades below its on-chain LTV-F backing, anyone flash-borrows USDC, the contract buys the cheap VY, retires it to VYT, releases the *exact pro-rata* collateral from VRT, sells it, repays the flash, forwards any profit to the buyback officer (VBBO), then pokes the reserve-yield rebalance. Source==live **PROVEN** (live impl metadata-IPFS `12203281df…` == hardhat artifact == build-info `c3d525c0` compile of workspace `ValinityFloorOfficer.sol`, keccak `0xc65077ba…` match; HEAD `1aa24be`). solc 0.8.27 / runs=100 / cancun.
 
-## Atomic flow (one Balancer V2 flash loan, inside `receiveFlashLoan`)
+> **PERMISSIONLESS now.** Anyone calls `executeFloor(uint256 flashAmount)`, caller pays gas. No operator, no caller swap params, no router whitelist — routing is hardcoded {UniV2 USDC/VY buy, UniV3 asset/USDC sell auto-tier}. The caller's only gain is a **bounded VGC keeper reward** from VGO; **all arbitrage profit goes to VBBO, not the caller.**
+
+## Atomic flow (one Balancer V2 0-fee flash loan, inside `receiveFlashLoan`) — admin functions EXCLUDED
 
 ```
- operator ──initiateFloor(flashAmt, withdrawals[], buySwaps[], sellSwaps[], profitSwaps[], deadline)──▶ VFO
-                                       │ (onlyOperator, nonReentrant, !paused, block.timestamp<=deadline)
-                                       ▼
-        Balancer V2 Vault ── flashAmt USDC ──▶ VFO.receiveFlashLoan  [guard: msg.sender==Vault && tload(flashSlot)]
-                                       │
-   1. buySwaps:   USDC ──[router.call]──▶ VY            (each step: tokenOut bal of VFO MUST strictly ↑, else revert)
-   2. vyAmount = VY.balanceOf(this)
-   3. VY ──safeTransfer──▶ VYT            (ALL bought VY, retired from circulation)   ◀── hardcoded sink
-   4. per withdrawal i:  reserve=asset.balanceOf(VRT); cap=vco.getAssetCap(asset)
-                         withdrawAmount[i] = capReduction[i] · reserve / cap          (contract-computed, LTV-exact)
-                         totalCapReduction += capReduction[i]
-   4.1 REQUIRE  totalCapReduction == vyAmount      ◀── THREE-WAY LOCK (CapReductionMismatch)
-   5. VRT ── assets[] (withdrawAmounts) ──▶ VFO     [vrt.withdrawForBuyback(assets, amts, address(this))]  ◀── recipient HARDCODED = this
-      VCO.decreaseAssetCap(asset, capReduction)     per i  (reverts if cap<floor)     ◀── golden rule: cap ↓ by exactly VY-to-VYT
-   6. sellSwaps:  assets ──[router.call]──▶ USDC                                       (output-↑ check per step)
-   7. USDC ── repayAmount (=flashAmt + 0 fee) ──▶ Balancer Vault                       ◀── hardcoded repay (revert if short)
-   8. profitSwaps: leftover USDC ──[router.call]──▶ VY   (last step tokenOut MUST==VY, else FinalSwapMustOutputVY)
-   9. profitVY = VY.balanceOf(this); VY ──safeTransfer──▶ profitRecipient (0xD2F0826a, in-circuit buyback)  ◀── hardcoded profit sink
-  10. CLEAN-STATE: balanceOf(this) == 0 for every withdrawn asset, USDC, VY, and all swap intermediates (else TokenBalanceNotZero)
+ anyone ──executeFloor(flashAmount)──▶ VFO     [nonReentrant, !execPaused, flashAmount!=0]
+            │   (best-effort: try vgo.beginReward() — snapshot gas; failure must NOT brick the defense)
+            │   tstore(_IN_FLASH_LOAN_SLOT, 1)
+            ▼
+   Balancer V2 Vault ── flashAmount USDC ──▶ VFO.receiveFlashLoan
+            │     [GATE: msg.sender==balancerVault && tload(_IN_FLASH_LOAN_SLOT)==1, else revert]
+            │     caller_ = abi.decode(userData) ── used ONLY in the event, NEVER as a recipient
+            ▼
+   1. USDC ──[UniV2 swapExactTokensForTokens, minOut=0]──▶ VY            vyAmount = ΔVY.balanceOf(this); revert if 0
+   2. _findBestAsset(VCO): asset = largest getAssetCap (== largest headroom above effectiveFloor); revert NoHeadroom if all at floor
+   3. REQUIRE vyAmount <= headroom (= cap − effectiveFloor)              else revert VyExceedsHeadroom
+   4. reserve = asset.balanceOf(VRT); cap = vco.getAssetCap(asset)
+      withdrawAmount = vyAmount · reserve / cap                          (contract-computed, LTV-exact; revert if 0)
+   5. VY ──safeTransfer──▶ VYT          (ALL bought VY retired from circulation)              ◀── hardcoded sink (burn)
+   6. VRT ── withdrawAmount of asset ──▶ VFO   [vrt.withdrawForBuyback([asset],[amt], address(this))] ◀── recipient HARDCODED = this
+   7. VCO.decreaseAssetCap(asset, vyAmount)    ◀── GOLDEN RULE: cap ↓ by EXACTLY the VY-to-VYT amount (floor-guarded in VCO)
+   8. asset ──[UniV3 exactInputSingle, deepest of 4 fee tiers via QuoterV2, minOut=0]──▶ USDC
+   9. CLOSED-CIRCUIT INVARIANT: asset.balanceOf(this) must NOT exceed preAssetBal   else revert TokenBalanceNotZero
+  10. USDC ── repayAmount (= flashAmount + 0 fee) ──▶ Balancer Vault                ◀── hardcoded repay (revert if short = self-protection)
+  11. leftover USDC > 0 ? ──[UniV2 buy VY]──▶ profitVY ──safeTransfer──▶ buybackOfficer (VBBO)  ◀── hardcoded PROFIT sink (NOT caller)
+  12. emit FloorExecuted(caller_, …)
+  13. vryo.execute()    ◀── ⚠ NOT try/catch'd: a VRYO revert rolls back the ENTIRE defense (availability coupling — see findings M1)
+            ▼
+   tstore(_IN_FLASH_LOAN_SLOT, 0)
+   if rewardArmed: try vgo.payReward(msg.sender) {} catch { emit KeeperRewardFailed }   ◀── caller's ONLY gain (bounded VGC)
 ```
 
-## Exit set — every token destination (NON-admin)
-| Token | Destination | Operator-controllable? | Guard |
+## Edge ledger — every token sink is HARDCODED (no caller-supplied recipient anywhere)
+| Edge | Token | Destination | Gate / note |
 |---|---|---|---|
-| VY (bought) | **VYT** (hardcoded `address(vyt)`) | NO | three-way lock ties amount to cap reductions |
-| reserve asset | **address(this)** (VRT withdrawal recipient) | NO | `withdrawForBuyback(…, address(this))` hardcoded; amount contract-computed |
-| USDC | **Balancer Vault** (flash repay) | NO | exact `flashAmt + fee`; revert if short |
-| profit VY | **profitRecipient** (storage, admin-set; in-circuit contract) | NO (operator can't set it) | hardcoded `_profitRecipient` |
-| any swap output | **address(this)** | NO | per-step `tokenOut.balanceOf(this)` must strictly ↑ (`SwapOutputZero`) |
+| buy VY | VY (in) | VFO (self) | UniV2, minOut=0 (atomic repay = effective slippage gate) |
+| retire | VY | **VYT** | hardcoded burn sink |
+| collateral release | asset | **VFO (self)** | `withdrawForBuyback(recipient=address(this))` — recipient hardcoded |
+| sell collateral | USDC (in) | VFO (self) | UniV3 deepest tier, minOut=0 |
+| flash repay | USDC | **Balancer Vault** | hardcoded; revert if insufficient |
+| profit | VY | **buybackOfficer (VBBO)** | hardcoded; admin-set address, NOT caller |
+| keeper reward | VGC | **msg.sender** | from VGO, best-effort, bounded by per-call cap + VGC ceiling |
 
-**There is NO `msg.sender`-, operator-, or calldata-derived recipient on any transfer or withdrawal.** The operator chooses *how* to swap (router + calldata) but every swap's **output must land back in VFO** (output-increase invariant), and every *settlement* exit is hardcoded. Net: the operator can pick routes/sizes but cannot redirect a single token to an arbitrary address.
+**Closed-circuit proof (permissionless-safe):** the permissionless `caller_` is used ONLY to label the `FloorExecuted` event — it is **never a fund recipient**. Every value sink is a hardcoded protocol address {VYT, VFO-self, Balancer, VBBO}. A bad `flashAmount` (too large, or VY ≥ floor) simply **reverts** via the atomic flash-repay (caller eats gas; protocol state untouched). Sandwiching the minOut=0 swaps harms only the caller (revert) or reduces VBBO profit — it can **never** under-back the protocol because collateral release (step 6) scales 1:1 with the VY burned (step 5/7).
 
-## Backing conservation (golden rule) — TEXTBOOK CORRECT
-- **VY into treasury → cap down, by exactly the amount:** `totalCapReduction == vyAmount` (every retired VY booked as a cap decrease). ✓ The cleanest golden-rule sink in the system. (This reconciles the VCO OFFICER_ROLE holder `0x3d9d78CD` — it is **VFO**, a cap-DECREASE actor; my earlier "buyback-2" label was wrong.)
-- **Backing ratio preserved (no under-backing):** `withdrawAmount = capReduction · reserve / cap` ⇒ `new_reserve/new_cap = reserve(1 − Δ/cap)/(cap − Δ) = reserve/cap` (Δ=capReduction). The pro-rata collateral released exactly matches the retired VY's share — per-VY backing is invariant. ✓
-- **Floor-protected:** `vco.decreaseAssetCap` reverts if a cap would fall below its effective floor.
-
-## Access model
+## Golden rule — TEXTBOOK cap-DECREASE (the cleanest backing-preserving sink)
 ```
- PERMISSIONLESS: (none — initiateFloor is onlyOperator; receiveFlashLoan is onlyBalancerVault)
- OPERATOR (0x6B700Bd4 EOA): initiateFloor — triggers a floor op, supplies routes/sizes (CANNOT redirect funds; see exit set)
- ADMIN_ROLE (0x8310eA7E EOA → governance):
-   ├─ setOperator                 repoint the trigger wallet
-   ├─ setProfitRecipient          repoint the profit sink   ⚠ (could divert profit if set to attacker)
-   ├─ setRouterWhitelist          add/remove swap routers   ⚠ (trust anchor — see note)
-   ├─ setPaused                   emergency stop
-   └─ rescueToken(token,to,amt)   arbitrary token+dest; does NOT block VY ⚠ (but standing balance ~0)
- NO UPGRADE PATH — contract logic is permanently frozen (non-proxy, no UUPS).
+ burn vyAmount VY → VYT     ==     vco.decreaseAssetCap(asset, vyAmount)      [exact same amount]
+ withdrawAmount = vyAmount · reserve / cap
+   ⇒ new_reserve / new_cap = (reserve − vyAmount·reserve/cap) / (cap − vyAmount) = reserve / cap   EXACTLY
+   ⇒ backing ratio PRESERVED; integer floor on withdrawAmount over-backs by dust, never under-backs.
+ DOUBLE-GUARDED: VFO pre-checks vyAmount ≤ headroom AND VCO.decreaseAssetCap reverts if newCap < effectiveFloor.
 ```
 
-**Router-whitelist trust note:** the per-step **output-increase invariant** (`tokenOut.balanceOf(this)` must strictly increase after each `router.call`) is the real containment — it neutralizes recipient-redirection / `sweepToken` / `multicall` exfil even on the legit routers (output sent elsewhere ⇒ no balance increase ⇒ revert), and bounds a *malicious* whitelisted router to "can't make output appear in VFO without actually delivering it." Live whitelist = UniV2 Router02 + UniV3 SwapRouter only.
-
-## Live state (today)
-- 41 `FloorExecuted` ops all-time; **standing balances VY=0, USDC=0** (clean-state holds live).
-- Roles held: VRT.BUYBACK_ROLE + VCO.OFFICER_ROLE (exactly the two needed — least privilege).
-- operator EOA `0x6B700Bd4`; profitRecipient contract `0xD2F0826a` (in-circuit); admin EOA `0x8310eA7E`; `execPaused=false`.
-
-**Verdict (RECONCILED, workflow `wkqttweuq` — 64 agents, 19 surv / 37 ref):** ✅ **CLOSED relative to roles — no arbitrary-destination exfiltration, even by a fully-compromised operator.** Every settlement exit is hardcoded {VYT, VRT→self, Balancer repay, profitRecipient}; the operator's only freedom (swap routing) is contained by the **per-step output-increase invariant** (L498, sampled *after* `router.call` → defeats recipient-redirect / `sweepToken` / `multicall`) + clean-state checks. **No surviving Critical/High *technical* finding** (the contested [High] `sweepToken` bypass was refuted — output check is post-call). Golden rule textbook-correct (cap↓ == VY-to-VYT via the three-way lock) and backing ratio exactly preserved (LTV-exact withdrawal; rounding dust over-backs). Operator-gated (no permissionless surface). Non-upgradeable (frozen). Residual: **VFO-H1** `setProfitRecipient` admin profit-diversion (profit-only, not principal); **M1** operator self-sandwich MEV (no minOut; principal-safe); **M2** `rescueToken` arbitrary token+dest (bal~0); **M3** unverified `withdrawForBuyback` return (needs VRT-bug + operator collusion); Lows (duplicate-asset hygiene, FoT-revert, router-whitelist trust, transfer-hook reentrancy) — all admin/operator-trust on a frozen contract, neutralized by moving ADMIN→timelock/gov + the revoke step.
+**Verdict (RECONCILED with workflow `wu2ofpcrf`):** ✅ **CLOSED relative to roles — no arbitrary-dest exfil even though executeFloor is now permissionless; golden-rule textbook-correct; 0 permissionless-exploitable leaks, 0 conservation violations.** The permissionless redesign is safe because profit→VBBO (not caller), bad sizing reverts atomically, and collateral release is rigidly proportional to VY burned. Residual: **C1** `_authorizeUpgrade` amplified by 3 roles (VRT.BUYBACK drain + VCO.OFFICER cap-mutation + VGO.OFFICER) — dominant lever, admin-trust/handoff; **M1** `vryo.execute()` un-try/catch'd → a VRYO revert/pause bricks the whole floor defense (availability coupling, inconsistent with the best-effort VGO leg); **M2** PAXG-FoT sells `withdrawAmount` not received balance → clean revert if PAXG fee active (availability only); Lows (minOut=0 self-sandwich principal-safe, rescueToken arbitrary token+dest but blocks VY, VGC keeper-budget farming bounded). See `findings/ValinityFloorOfficer.md`.
 
 ---
 
-## ⚙️ Admin / governance powers — permanent at handoff
+## ⚙️ Admin / role powers — permanent at handoff (EXCLUDED from the atomic proof above)
 | Power | Function | Effect | Handoff requirement |
 |---|---|---|---|
-| Trigger wallet | `setOperator` | repoint who can run floor ops | gov/keeper-controlled; rotate on compromise |
-| **Profit sink** | `setProfitRecipient` | divert floor-arb profit | timelock + gov; keep = in-circuit buyback |
-| **Router whitelist** | `setRouterWhitelist` | the swap-routing trust anchor | timelock + gov; only legit DEX routers |
-| Emergency stop | `setPaused` | halt ops | gov/guardian |
-| Token rescue | `rescueToken` | arbitrary token→arbitrary dest (no VY block) | timelock + gov; standing balance ~0 limits blast radius |
-| ~~Upgrade~~ | — | **none — frozen logic** | ✅ no action (cannot be changed) |
+| **Upgrade** | `_authorizeUpgrade` (UUPS, ADMIN_ROLE) | **#1 LEVER** — replace logic; a malicious impl can drain VRT reserves (BUYBACK_ROLE) + mutate VCO caps (OFFICER_ROLE) | codehash/timelock; migrate DEFAULT_ADMIN+ADMIN atomically with VRYO/DAX (shared KMS) |
+| Profit redirect | `setBuybackOfficer` | divert floor-arb profit (profit-only, not principal) | timelock |
+| Rebalance target | `setVryo` | point the end-of-tx poke (or 0 to disable) | timelock; prefer try/catch in a future impl (M1) |
+| Reward engine | `setVgo` | point/disable the keeper reward (best-effort already) | timelock |
+| Venue setters | `setBalancerVault`/`setV2Router`/`setV3Factory`/`setV3Router`/`setV3Quoter`/`setUsdc` | re-point external venues | timelock; freeze to canonical |
+| Pause | `setPaused` | halt floor defense | fast guardian |
+| Rescue | `rescueToken` | arbitrary token+dest (VY blocked) | timelock; bal~0 |
 
-→ See `findings/ValinityFloorOfficer.md`. Both `DEFAULT_ADMIN_ROLE` + `ADMIN_ROLE` (today `0x8310eA7E…4a09`) → timelocked governance; the operator EOA → a controlled keeper.
+→ See `findings/ValinityFloorOfficer.md`. **Roles held by the new VFO:** VRT.BUYBACK_ROLE + VCO.OFFICER_ROLE + VGO.OFFICER_ROLE + VY-whitelist (old `0x3d9d78CD` revoked on all). **The upgrade lever is admin-equivalent to reserve-drain + cap-mutation — the dominant handoff concern.**

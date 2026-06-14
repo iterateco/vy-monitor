@@ -3,6 +3,8 @@ import ValinityDAX from './ValinityDAX';
 import ValinityVdaoDAX from './ValinityVdaoDAX';
 import ValinityPortal from './ValinityPortal';
 import ValinityStakingRouter from './ValinityStakingRouter';
+import ValinityYieldOfficer from './ValinityYieldOfficer';
+import ValinityYieldTreasury from './ValinityYieldTreasury';
 import ValinityToken from './ValinityToken';
 
 export default {
@@ -11,5 +13,7 @@ export default {
   ValinityVdaoDAX,
   ValinityPortal,
   ValinityStakingRouter,
+  ValinityYieldOfficer,
+  ValinityYieldTreasury,
   ValinityToken
 };

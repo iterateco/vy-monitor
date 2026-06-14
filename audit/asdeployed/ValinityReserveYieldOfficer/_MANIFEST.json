@@ -1,16 +1,30 @@
 {
-  "contract": "ValinityReserveYieldOfficer (VRYO)",
+  "contract": "ValinityReserveYieldOfficer (VRYO) — ValinityDAX edition (V3 redesign; VLM-free)",
   "proxy": "0xA95749f52031dA2c4baB7cf38323B69A9E3415d3",
-  "impl": "0x89f256f0035dea79584cbbdec4036dfd5e1fa2b3",
-  "source_proof": {
-    "commit": "c4bfc30",
-    "file": "ValinityReserveYieldOfficer.sol",
-    "metaIpfs": "0c18431c605d417ea124859855c5131c68c475505306ef8eaaea529194db1f14",
-    "metaStrippedBytes": 18110,
-    "note": "artifact.deployedBytecode+metadata == live (bytediff MATCH, only 2 UUPS immutables differ). BUT recorded solcInputHash a50f3f1a is STALE (recompiles to d3752a6a, NOT live) — VAO-style pointer bug; do not trust it. Workspace a89611b is AHEAD (compiles to fff08e0f), not yet deployed."
+  "impl": "0xc8b848b9b9d8bf67f972455a628cfe4cebb0a241",
+  "supersedes": "Prior audit (impl 0x89f256f0, Uniswap-V3-LP-via-VLM design, 2026-06-02) is OBSOLETE — the VLM/Uniswap-V3 model was eliminated. This file + the matching findings/diagram OVERWRITE it.",
+  "deployment": "UUPS proxy (impl slot -> 0xc8b848b9). ADMIN_ROLE-gated _authorizeUpgrade. Upgraded 2026-06-08 (block 25275278) via reinitializeV3.",
+  "sourceVerification": {
+    "method": "metadata IPFS hash equality (gold standard) + build-info source keccak",
+    "liveImplMetadataIpfs": "1220dbfd2e462014b21b5a6e646c679551f47c101d7484ae551150607810dfce5e97",
+    "match": "live impl metadata IPFS == hardhat artifact deployedBytecode metadata == build-info c3d525c0 compile of the workspace ValinityReserveYieldOfficer.sol (build-info embedded source keccak == workspace keccak, EXACT).",
+    "git": "workspace == HEAD 1aa24be ('upgrades', the new commit on branch Sergio/contracts-updates, ahead of a85f449). 619 ln (was 1015 ln in the VLM era).",
+    "solc": "0.8.27+commit.40a35a09",
+    "optimizer": { "enabled": true, "runs": 100 },
+    "evmVersion": "cancun",
+    "note": "impl 12419 B. Conclusion: workspace == as-deployed == live."
   },
-  "inlined_library": "V3ZapMath (compiled into VRYO, not externally linked)",
-  "solc": "0.8.27+commit.40a35a09",
-  "method": "metadata-IPFS-hash equality: c4bfc30 source recompiled within a89611b build-info closure == live impl metadata",
-  "verified_date": "2026-06-02"
+  "whatItIs": "Deploys a per-asset fraction of VRT's reserves into the protocol's OWN ValinityDAX VY/asset pools as one-sided, protocol-owned asset DEPTH (instead of the old Uniswap-V3 concentrated-LP yield). A CLOSED LEG of VRT: it shuffles cap-units between VCO and its own capVRYO ledger (globalCap = vco.getAssetCap + capVRYO is CONSERVED); it does NOT mint or move circulating VY. Per managed asset A in {WETH,WBTC,PAXG}: target = globalCap(A) x assetDeployRatioBps[A]/10000. DEPLOY (execute->_rebalanceAsset->deployStep self-call under try/catch): move dCap VCO->VRYO (vco.decreaseAssetCap), pull dCap x vco.getLTV(A) asset from VRT (vrt.deployForYield, VRYO_ROLE), inject into the DAX pool (dax.reserveInjectAsset, RESERVE_OFFICER_ROLE); books deployedAsset += the DAX's ACTUAL balance gain (FoT-safe), capVRYO += dCap; LTV-neutral; officer holds NO asset between txs. RECALL (_recall): move dCap VRYO->VCO (vco.increaseAssetCap), extract dCap x (deployedAsset/capVRYO) [STALE blended LTV] asset from the DAX straight to VRT (reserveExtractAsset recipient=VRT); clamped to the pool's live asset reserve + DAX real balance; try/caught. rescueTokens (ADMIN, works while paused): full-recall all to VRT + restore VCO caps.",
+  "fundFlow": {
+    "asset": "VRT -> officer(transient) -> DAX (deploy inject); DAX -> VRT (recall extract, recipient hardcoded address(vrt)). Officer holds NO asset between txs (balanceOf==balBefore invariant at deployStep).",
+    "cap": "cap-units shuffle VCO <-> VRYO ledger only (vco.decreaseAssetCap/increaseAssetCap + capVRYO +=/-=). globalCap conserved. No circulating VY minted/moved.",
+    "noArbitraryDest": "Every destination is hardcoded {DAX, VRT} or the VCO/capVRYO ledger; rescueTokens settles only to VRT; no caller-supplied recipient. CLOSED relative to roles."
+  },
+  "liveConfig": {
+    "admin": "DEFAULT_ADMIN + ADMIN = KMS 0x8310eA7E",
+    "wiring": "dax=0xD256C672 (real DAX), vco=0x2f024159, vrt=0x06087789. paused=false, keeperThresholdBps=250 (2.5%).",
+    "roles": "DAX.RESERVE_OFFICER_ROLE(VRYO)=true, VCO.OFFICER_ROLE(VRYO)=true, VRT.VRYO_ROLE(VRYO)=true. (Old VRT.OFFICER_ROLE no longer used.)",
+    "state": "LIVE + FUNDED. All 3 assets ratioBps=6000 (60%, ramped from 20%). capVRYO {WETH 102856 VY, WBTC 101455 VY, PAXG 22087 VY} ~226k VY cap deployed. deployedAsset {3.83 WETH, 0.099 WBTC (9913663 sats), 0.326 PAXG}.",
+    "deprecatedSlots": "swapRouter/npm/vlm/usdc/PAIR_*/pairFee/deployRatioBps/capFloor/slippageBps/capVRYO_total(=0)/pairPrincipal/lastCirculatingVY kept ONLY to pin the UUPS storage layout; unused. DAX-edition vars (assetDeployRatioBps, dax, capVRYO, deployedAsset) carved from the former __gap (38->34)."
+  }
 }

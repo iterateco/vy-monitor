@@ -1,81 +1,56 @@
-# Audit: ValinityReserveYieldOfficer (VRYO) — contract 8
+# VRYO — ValinityReserveYieldOfficer — Findings · **ValinityDAX edition (V3 redesign)**
 
-> **RECONCILED** with multi-agent adversarial workflow `wy9fa82g7` (22 agents; 11 findings → 5 survived / 6 refuted, severities corrected on refutation). **Verdict: CLOSED — no arbitrary-destination leak ANYWHERE (not even admin)**, exhaustively confirmed. **0 Critical / 0 High / 0 Medium / 1 Low** (bounded execute MEV) + Info. **Cap-accounting PASSED — no VLO-M1-style inflation bug** (deploy/recall symmetric in VY units; per-asset caps self-correcting + floor-bounded). All four preliminary "High/Medium" candidates were **downgraded** (the two handoff "High"s are admin-only governance-trust items; the MEV is Low; the cap-drift is a self-correcting Info). Produced **6 cross-contract obligations on VCO** (§ below).
+> ⚠️ **OVERWRITES the prior VRYO audit** (`wy9fa82g7`, Uniswap-V3-LP-via-VLM, impl `0x89f256f0`). That design is **eliminated**: VLM is fully disconnected. Live impl is now `0xc8b848b9` (upgraded 2026-06-08, block 25275278).
 
-- **Proxy:** `0xA95749f52031dA2c4baB7cf38323B69A9E3415d3` → **UUPS impl** `0x89f256f0035dea79584cbbdec4036dfd5e1fa2b3`
-- **Source:** as-deployed `ValinityReserveYieldOfficer.sol` (1011 ln, commit `c4bfc30`) · solc 0.8.27 · UUPS + AccessControl + ReentrancyGuardTransient + Initializable. `V3ZapMath` inlined (no external/linked library, **no delegatecall anywhere**).
-- **Role in flow:** the **reserve-yield officer** — deploys a fraction (`deployRatioBps`, live 85%) of VRT's reserves into **VRT-owned** Uniswap V3 positions (VLM authors the NFTs, VRT custodies, VRYO moves capital). Holds **VRYO_ROLE + OFFICER_ROLE on VRT** and **OFFICER_ROLE on VCO**. It is the 4th VRT role-holder (with VLO, VLM, VBBO).
+**Address:** proxy `0xA95749f52031dA2c4baB7cf38323B69A9E3415d3` → impl `0xc8b848b9b9d8bf67f972455a628cfe4cebb0a241` (UUPS).
+**Source==live:** PROVEN (live impl metadata-IPFS == hardhat artifact == build-info `c3d525c0` compile of workspace `ValinityReserveYieldOfficer.sol`, 619 ln, keccak match; HEAD `1aa24be`). solc 0.8.27 / runs=100 / cancun.
+**Status:** ✅ RECONCILED with workflow `wqm7zyrs0` (26 agents, 6 dims joint VRYO+DAX; 35 raw → 13 survived / 6 refuted / 16 Low-Info). Verdict aligned: **no closed-circuit break, cap conservation confirmed, 0 Critical/permissionless**. Tally (VRYO side): 1 Critical · 0 High · 1 Medium · 4 Low. The redesign's central risk is **economic backing-quality**, governance-accept.
 
-## Gate 1 — Source == Live ✅ (metadata-hash proven)
-The recorded artifact's `deployedBytecode`+`metadata` **== live** (bytediff: only the 2 UUPS `__self` immutables differ; ipfs `0c18431c…`). **But** the recorded `solcInputHash a50f3f1a` is **stale/inconsistent** (recompiles to `d3752a6a…`, NOT live — the VAO-style pointer bug; don't trust it). Reconstructing via the build-info closure + git: only commit **`c4bfc30`** of VRYO.sol recompiles to live metadata `0c18431c…` (the workspace `a89611b` "UPdates" compiles to `fff08e0f…` → 1 commit AHEAD, not deployed). As-deployed saved to `audit/asdeployed/ValinityReserveYieldOfficer/` (+ `_MANIFEST.json`). See [reference_recompile_stale_artifact].
+## Summary
 
-## What it is — target-based reserve-yield deployer
-`execute()` reads `circulatingVY` from VCO, computes `target = circulatingVY × 85%`, and deploys/recalls to converge `capVRYO_total` toward target across the 2 managed pairs (WETH/WBTC, PAXG/USDC).
+The reserve-yield officer, fully redesigned: it now deploys a per-asset fraction of VRT's reserves into the protocol's **own ValinityDAX VY/asset pools** as one-sided asset depth (instead of Uniswap-V3 LP), and recalls it as caps move. A **closed leg of VRT** — `globalCap(A) = vco.getAssetCap(A) + capVRYO[A]` is conserved; it never mints/moves circulating VY.
 
-| Function | Access | Effect |
-|---|---|---|
-| `execute()` | **PERMISSIONLESS**, nonReentrant | drift-gate (skip body if circ-VY moved <2.5%); deploy or recall loop; settle all to VRT; best-effort `vlm.snapbackHome` (try/catch, fires even on skip) |
-| `reinitializeV2` | ADMIN, reinitializer(2) | already consumed |
-| `setDeployRatio`(≤95%), `setSlippage`(≤5%), `setKeeperThreshold`(≤20%), `setVlm`, `setPairFee` (blocked while pair live), `setPaused`, `_authorizeUpgrade` | ADMIN | config / UUPS |
-| `sweepUsdcDust()` | ADMIN, nonReentrant | settle balances **→ VRT** |
-| `rescueTokens()` | ADMIN, nonReentrant | **NO ARGS** — unwind all positions + restore caps + settle **→ VRT** |
-| `getCirculatingVY`/`getCapVRYOTotal`/`getPairPrincipal`/`getVcoHeadroom`/`getPairKey` | view/pure | — |
+- **#1 closed-circuit (PASS).** Every asset destination is hardcoded {DAX (inject), VRT (recall/rescue)}; cap-units only shuffle VCO↔`capVRYO`. No caller-supplied recipient anywhere. The officer holds no asset between txs (`balanceOf==balBefore` invariant). `rescueTokens` settles only to VRT.
+- **Cap conservation (PASS).** Deploy: `vco.decreaseAssetCap(Δ)` + `capVRYO += Δ`; recall: `vco.increaseAssetCap(retireVY)` + `capVRYO -= retireVY`. Symmetric. The up-front cap shift is undone on a failed VRT pull; the `deployStep` self-call try/catch rolls back per-asset on any sub-failure; the floor clamp keeps VCO above `effectiveFloor`.
+- **Residual = admin/upgrade trust** (dominant `_authorizeUpgrade`, now amplified by 3 roles) **+ a backing-quality economic shift** (the headline of the redesign — see VRYO-M1).
 
-**Live state (mainnet):** paused=false; deployRatioBps=8500 (85%); **slippageBps=50 (0.5%, tight)**; keeperThresholdBps=250 (2.5%); vlm=`0x920abb09…` (=VLM ✅); vco=`0x2f024159…`; vrt=`0x06087789…`; swapRouter/npm = canonical Uniswap V3; weth/wbtc/paxg/usdc = canonical mainnet ✅; pairs = WETH/WBTC + PAXG/USDC (fee 500) = **exactly VLM's snapback set** ✅; capVRYO_total≈323k VY, lastCirculatingVY≈380k VY.
+**Live: LIVE + FUNDED.** ratio 60% all assets; ~226k VY cap deployed (WETH 102.9k / WBTC 101.5k / PAXG 22.1k) backed by 3.83 WETH / 0.099 WBTC / 0.326 PAXG. Roles all correctly held; VLM fully disconnected.
 
-## Gate 0 — Atomic fund flow / CLOSED-CIRCUIT — my read: CLOSED, no arbitrary-destination leak ANYWHERE
-Every token movement (permissionless **and admin**) has a hardcoded destination:
+---
 
-| Edge (line) | Token | Destination | Class |
-|---|---|---|---|
-| zap swap (804) | token | **address(this)** (VRYO) | fixed-self |
-| reverse-zap swap (705) | token | **address(this)** | fixed-self |
-| USDC→PAXG swap (864) | PAXG | **address(this)** | fixed-self |
-| deployForYield recipient (555) | source asset | **address(this)** (pull from VRT) | fixed-self |
-| increaseLiquidity (825) | token0/1 | **VRT's NFT** (VRT owns) | fixed-internal |
-| decreasePositionLiquidity (686) | token0/1 | **VRYO** (then settled to VRT) | fixed-internal |
-| `_settleAllToVRT` (382,387,392) | WETH/WBTC/PAXG | **address(vrt)** + zero-balance `InvariantViolation` checks | fixed-internal |
-| forceApprove (698,798,818-19,858) | — | swapRouter / npm only | bounded |
+## Findings (preliminary — to be reconciled with workflow)
 
-→ **There is NO arbitrary-`to` transfer anywhere in VRYO — not even for admin.** `rescueTokens()` takes **no destination argument**; it unwinds to VRT. This is **stronger than VLM** (whose `rescueTokens` had an arbitrary `to`). Closed circuit holds by construction.
+### VRYO-C1 [Critical — admin/upgrade, deferred-handoff] `_authorizeUpgrade` amplified by THREE roles
+[ValinityReserveYieldOfficer.sol:258](../asdeployed/ValinityReserveYieldOfficer/contracts/officer/ValinityReserveYieldOfficer.sol#L258) — `onlyRole(ADMIN_ROLE)`, no timelock. VRYO holds **DAX.RESERVE_OFFICER_ROLE + VCO.OFFICER_ROLE + VRT.VRYO_ROLE**. A malicious VRYO upgrade can: drain **all DAX pool asset reserves** to an attacker (`reserveExtractAsset(recipient=attacker)`), mutate VCO caps (phantom inflation), and pull VRT reserves (`deployForYield`). The combined blast radius is larger than the old VRYO. **Handoff:** migrate DEFAULT_ADMIN + ADMIN together to governance + external TimelockController; renounce the EOA. (Same dominant-lever family as every officer; flagged Critical for the 3-role amplification.)
 
-## Findings (reconciled): 0 Critical, 0 High, 0 Medium, 1 Low, rest Info
-| ID | Sev | Finding |
-|---|---|---|
-| **VRYO-L1** | **Low** | **Bounded execute() zap MEV (sandwich).** `_zapIntoV3`/`_recallFromPair` reverse-zap/`_swapAllUsdcToPaxg` all compute `minOut` from **live slot0** (`V3ZapMath.computeMinOut`, `sqrtPriceLimitX96:0`); the `vlm.assertTwapAligned` guard is a **band check** (reverts only beyond ±3% slot0-vs-TWAP) — so a front-run nudging slot0 to the ±3% edge passes, and minOut is computed at that adversarial price. **Confirmed** but **bounded:** ±3% TWAP band + **0.5%** live slippage + **2.5% circulating-VY drift gate** (attacker can't trigger `execute()` at will — body runs only on organic ≥2.5% supply drift), take sliced to gap/3, per-event notional tiny (~few-k VY vs ~323k book). Net of attacker's own round-trip Uniswap fees + pool price-impact, extraction is small. **Value-leak-no-redirect** (attacker profits via own pool trades, not a VRYO transfer). Same accepted pattern as VLM-L1. |
-| **VRYO-cap** | **PASS (no bug)** | **Cap-accounting verified sound — no VLO-M1 inflation.** Deploy `decreaseAssetCap(source, takeVY)`+`capVRYO_total+=takeVY`+`pairPrincipal+=takeVY`; recall the exact inverse; rollback on zap-fail (L561). Always `capVRYO_total == Σ pairPrincipal`; no path moves cap/principal by more than the VY actually moved. **Per-asset WETH/WBTC cap is non-invariant but SELF-CORRECTING:** deploy picks highest-headroom side, recall restores lowest-cap side → a *stabilizing* loop toward equalization (not a runaway), and `decreaseAssetCap` reverts below VCO `effectiveFloor` → no collapse. The `(0,0)` liquidity mins on increase/decrease are SAFE (value bounded by the swap's `amountOutMinimum` + the zero-balance settle invariant). |
-| **VRYO-I-grief** | Info | **Spam `execute()` below the 2.5% drift gate** = pure no-op (body bypassed, zero state writes), and the snapback hook is throttled by VLM's own cooldown + VGO reward disabled for `msg.sender==vryo` → attacker earns nothing, harms only own gas. No protocol cost. |
-| **VRYO-I-handoff** | Info | `slippageBps` (≤5%) and the `vlm` address become permanent governance-mutable params at Fase 4 (both admin-only; can't redirect funds; subsumed by governance's UUPS upgrade power). Watchlist, not a vulnerability. |
-| **VRYO-I-snapback** | Info | `vlm.snapbackHome` fires on every `execute()` (even paused/skipped) — gas-bounded (1.5M) + try/catch; throttling owned by VLM's 6h cooldown. |
-| **VRYO-I-decimals** | Info | `_scaleFromWad` (WBTC 8dp): tiny `pullAmount18` can round to 0 → deploy skipped (return 0), no corruption. |
-| **VRYO-I-rescue** | Info | No arbitrary-dest rescue (`rescueTokens()`/`sweepUsdcDust()` have no `to`) — strictly to VRT. Stronger than VLM. |
+### VRYO-M1 [Medium — economic/backing, by-design] Reserve depth is exposed to conversion into VY-in-pool
+The core of the redesign: VRYO injects reserve asset into a **shared** DAX VY/asset pool as one-sided depth and receives **no VDAX** (its claim is enforced only by `RESERVE_OFFICER_ROLE` + the `deployedAsset` ledger). The single-sided injection makes the asset cheap → the (now whitelisted) MEV bot and whitelisted swaps (VEO routing users, VBBO, VAO) swap VY→asset, taking the deployed asset **out** of the pool and leaving VY. So a deploy can effectively **convert hard-asset backing (WETH/WBTC/PAXG) into protocol-own-VY-in-pool** — a real-backing-quality reduction (you can't back VY with VY). Also: `deployedAsset[A]` only decrements on recall, **not** when swaps/arb thin the pool → it can **overstate** the pool's actual asset reserve, over-counting backing in any view/monitor that reads it (recall itself is safe — clamped to the live reserve). Bounded by the deploy ratio (live 60%, max 95%) and the asset stays inside the protocol's own DEX. **Not permissionless-exploitable** (value goes to the pool/VBBO, not an attacker) and cap is conserved — this is a **governance risk-acceptance**: how much hard reserve to expose as DEX depth. *(Workflow to quantify worst-case + confirm the monitor double-count guidance from [[project_vryo_v3_dax_redesign]].)*
 
-## Cap-accounting verdict — PASS (no inflation; conserved aggregate; self-correcting per-asset)
-- **Symmetric in VY units.** Deploy (`_deployIntoPair`): `vco.decreaseAssetCap(source, takeVY)` (549) + `capVRYO_total += takeVY` (566) + `pairPrincipal[pair] += takeVY` (567). Recall (`_recallFromPair`): exact inverse (716-719). Invariant `capVRYO_total == Σ pairPrincipal` always holds; no path moves more than the VY actually moved. Zap-fail rolls back `increaseAssetCap(source, takeVY)` (561).
-- **Per-asset WETH/WBTC cap non-invariant but SELF-CORRECTING.** Deploy picks highest-headroom side; recall restores lowest-cap side (`_pickWWRecall`, 657) → stabilizing toward equalization (the *opposite* of a runaway). Downward drift hard-bounded by VCO `decreaseAssetCap` reverting below `effectiveFloor` → no collapse. `getLTV(source)` feedback into `pullAmount` is economically neutral, deterministic, floor-bounded.
-- **`rescueTokens` cap restoration symmetric** (966-976): restore per-pair principal → VCO, zero ledgers. No double-count.
-- **`(0,0)` liquidity mins SAFE:** increase value protected by the prior swap's `amountOutMinimum` + zero-balance settle invariant; burn proceeds proportionate + invariant-checked.
+### VRYO-M2 [Medium — operational/keeper] Partial-recall degradation needs monitoring
+When whitelisted swaps/arb thin a pool faster than the band-gated `execute()` recalls, `_recall` clamps to the live reserve and retires cap **proportionally** (cap stays conserved — the workflow refuted the "stagnates indefinitely / phantom cap" over-claim: each `execute()` still makes progress, and `delta/globalCap` stays above the 2.5% band so rebalancing keeps firing). But the **intended deploy ratio may not be realized** and `deployedAsset[A]` overstates the live pool reserve until recall reconciles. **Mitigation:** governance monitor `deployedAsset[A]` vs the live `pool.reserveAsset`; alert on divergence; `setAssetDeployRatio(asset,0)` or `rescueTokens` to reset. Not exploitable, not a conservation break.
 
-## Cross-contract dependencies
-- **VRT (VRYO_ROLE + OFFICER_ROLE):** `deployForYield`, `decreasePositionLiquidity`, `getPositionSnapshot` — VRT audited (closed relative to roles) ✅.
-- **VLM:** `refreshSnapshot`/`assertTwapAligned`/`snapbackHome` (the ±3% TWAP guard VRYO relies on) — VLM audited ✅.
-- **Shared admin key** across the officer set.
+### VRYO-L4 [Low — accounting, by-design] Asymmetric LTV drift (deploy live vs recall frozen)
+Deploy pulls asset at VCO's **live** LTV; recall converts at the **frozen blended** internal LTV (`deployedAsset/capVRYO`) — "recall nudges VCO's LTV — intended" ([:73-76](../asdeployed/ValinityReserveYieldOfficer/contracts/officer/ValinityReserveYieldOfficer.sol#L73)). Workflow CONFIRMED: cap is conserved; under-backing is bounded (<5–10 bps per 10% LTV swing + pool drain), guard-railed by the floor clamp + recall clamp + try/catch; **non-exploitable** by any permissionless caller (amounts VRYO-computed, destinations VRT/DAX). Documented economic trade-off.
 
-## ⚠️ Cross-contract obligations VRYO places on VCO (carry into the VCO audit)
-VRYO's cap-integrity + closed-circuit guarantees are conditional on VCO honoring these — **verify each when auditing VCO:**
-1. `decreaseAssetCap`/`increaseAssetCap` are exactly additive/symmetric in VY units and **OFFICER_ROLE-gated** (so `decrease(x)` then `increase(x)` round-trips with no internal scaling/rounding drift).
-2. `decreaseAssetCap` **reverts below `effectiveFloor()`** — this is the *only* bound preventing per-asset cap collapse under VRYO's deploy loop. Confirm the floor can't be set to 0 / bypassed.
-3. `getLTV(asset) = reserveOf/cap × WAD` is a faithful, non-manipulable attribution (it's VRYO's `pullAmount` multiplier — no permissionless path may inflate `reserveOf` or deflate `cap`).
-4. **`getTotalCirculatingVY()` is NOT permissionlessly manipulable intra-tx** — it drives VRYO's target + drift gate; manipulating it would be the attacker's missing "trigger `execute()` at will" lever for VRYO-L1.
-5. `getAssetCap`/`effectiveFloor` are consistent with the mutators (VRYO reads them in the pickers + rescue restore).
-6. **OFFICER_ROLE on VCO** stays correctly assigned to VRYO post-handoff and grants no cap mutation beyond the symmetric increase/decrease pair.
+### VRYO-L5 [Low — handoff] Admin setters have no timelock; `setDax` re-point
+`setAssetDeployRatio`/`setKeeperThreshold`/`setPaused`/`setDax` are instant ADMIN ops. Fold into the C1 timelock requirement. `setDax` re-points the DEX VRYO injects into — confirm = real DAX (live ✅).
 
-## Check-off
-- [x] Source == live (metadata-hash proven; live = `c4bfc30`; solcInputHash stale; workspace 1 commit ahead)
-- [x] Fund-flow mapped — CLOSED, no arbitrary-destination leak anywhere (my read)
-- [x] Live-state read (ratios, slippage, threshold, roles, pairs — all consistent)
-- [x] Multi-agent adversarial workflow `wy9fa82g7` reconciled (22 agents; 5 survived / 6 refuted; severities corrected)
-- [x] **User agrees → checked off 2026-06-02**
+### VRYO-Info [confirmed] VLM fully eliminated
+VLM `0x920AbB09` holds **zero roles** on VRT (`VLM_ROLE`/`LIQUIDITY_MANAGER_ROLE`/`OFFICER_ROLE`/`VRYO_ROLE`/`BUYBACK_ROLE` all false), VCO (`OFFICER_ROLE` false), and DAX (`RESERVE_OFFICER`/`swapWhitelist`/`ADMIN` false). The deprecated `VLM_ROLE` *definition* lingers in VRT's source but no contract holds it (the workflow's one VLM gap — discharged on-chain).
 
-## Final tally (reconciled): 0 Critical, 0 High, 0 Medium, **1 Low** (VRYO-L1 bounded execute zap MEV — no redirect, opportunistic/drift-gated, tiny notional), rest Info.
-**The closed circuit HOLDS for ALL callers including admin** — no arbitrary-`to` transfer exists anywhere in VRYO (every sink hardcoded: swaps→self, deploy-pull→self, increaseLiquidity→VRT NFT, settle→VRT with zero-balance `InvariantViolation` checks; `rescueTokens()`/`sweepUsdcDust()` have no destination arg). **Cap-accounting is sound — no VLO-M1 inflation bug** (symmetric in VY units; per-asset caps self-correcting + floor-bounded). The single residual is bounded no-redirect MEV (Low), identical in kind to the accepted VLM-L1. **VRYO is cleared from its own side for the irreversible DEFAULT_ADMIN_ROLE handoff, conditional on the VCO audit confirming the 6 cross-contract obligations above.**
+### VRYO-L1 [Low] `execute()` permissionless; injection drift is arb'd to VBBO
+`execute()` is permissionless and band-gated (2.5%). Injecting/extracting asset shifts the pool price; the arb is captured by the MEV bot → VBBO, not the caller. Timing `execute()` is a protocol-beneficial keeper poke; no attacker edge (value never routes to the caller). Confirm rounding (mulDiv floors) always favors the protocol.
+
+### VRYO-L2 [Low] PAXG/FoT handled on VRYO's side; DAX over-counts
+`deployStep` books `deployedAsset += DAX actual balance gain` (FoT-safe) and recall clamps to the DAX real balance — so VRYO's ledger is exact for PAXG. But `dax.reserveInjectAsset` credits the pool's `reserveAsset` by the **nominal** amount → the DAX over-counts PAXG by the fee (the pre-existing DAX-L2; see DAX findings).
+
+### VRYO-L3 [Info] Deprecated VLM-era storage slots retained for layout
+swapRouter/npm/vlm/usdc/PAIR_*/pairFee/deployRatioBps/capFloor/slippageBps/`capVRYO_total`(=0)/pairPrincipal/lastCirculatingVY kept only to pin the UUPS layout; unused. `capVRYO_total` reads 0 — monitors must use `Σ capVRYO(asset)`.
+
+---
+
+## Handoff checklist
+1. Migrate DEFAULT_ADMIN + ADMIN together → governance + timelock; renounce EOA (VRYO-C1). The upgrade lever commands 3 powerful roles.
+2. Decide the acceptable `assetDeployRatioBps` (live 60%, max 95%) — the dial on how much hard reserve is exposed as DAX depth (VRYO-M1).
+3. Confirm the monitor counts `deployedAsset` correctly (in Round-Floor numerator, NOT double-counted in daxTVL) and is aware it can overstate vs the live pool reserve (VRYO-M1).
+4. VLM is fully eliminated — confirmed zero roles on VRT/VCO/DAX. No dangling VLM reference can touch reserves/caps.
