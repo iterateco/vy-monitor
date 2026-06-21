@@ -1,0 +1,27 @@
+{
+  "contract": "ValinityExecutor (the governance timelock / 'executioner')",
+  "address": "0x710AE2116B3EDd566D3594bd8191a4e6EFcE3449",
+  "role": "THE HANDOFF DESTINATION (executor side). Designed to become DEFAULT_ADMIN/ADMIN/owner of EVERY governed Valinity contract. Holds the admin power; executes governance-approved batches after a 7-day delay.",
+  "deployment": "NON-PROXY / NON-UPGRADEABLE (plain contract, constructor-based; no EIP-1967 impl slot). 2,104 B. NO admin role, NO canceller role, EXECUTOR_ROLE = anyone (permissionless execute), PROPOSER set ONLY in the constructor (the Governor), no setter. MIN_DELAY = 7 days hardcoded immutable.",
+  "constructorArgs": ["governance = 0x4548963212390B1E44eFc69BcC672dd84d09bbA1 (ValinityGovernanceOfficer)"],
+  "sourceVerification": {
+    "method": "metadata-IPFS gold standard (both legs): live runtime deployedBytecode metadata == hardhat artifact metadata, AND build-info embedded source keccak256 == workspace .sol keccak256 (non-proxy → runtime == artifact modulo metadata + immutables)",
+    "liveMetadataIpfs": "1220745fbf39825e8228c102097f81ff7dd6541d24d533a853452cf09929ae5f86df",
+    "artifactMetadataIpfs": "1220745fbf39825e8228c102097f81ff7dd6541d24d533a853452cf09929ae5f86df (IDENTICAL to live)",
+    "buildInfoSourceKeccak_eq_workspace": true,
+    "buildInfo": "3221a1b0b43ccbf2b51e09a8a8f36855.json",
+    "matchedSource": "contracts/governance/ValinityExecutor.sol (233 lines; git-M deployed-from-workspace, workspace==live)",
+    "solc": "0.8.27", "optimizer": { "enabled": true, "runs": 100 }, "evmVersion": "cancun", "liveBytes": 2104
+  },
+  "audit": {
+    "workflow": "wapagthnp (joint Governor+Executor, 6 dimensions, adversarial 2-skeptic default-refute)",
+    "design": "schedule(targets,values,calldatas,salt) onlyProposer(Governor) → readyAt = now + 7d. execute(...) anyone, after readyAt, sets executed=true BEFORE the call loop (reentrancy guard), runs all calls atomically (revert on any failure). hashOperation = keccak(abi.encode(targets,values,calldatas,salt)) (collision-safe). No cancel, no admin, no setter.",
+    "verdict_RECONCILED": "✅ Timelock CORE mechanics PROVEN sound (EXEC-1/2/3/4 refuted as exploits): schedule() is Governor-only (isProposer set once in constructor, no setter); execute() permissionless but gated by readyAt + 7d delay + executed-flag-before-calls (CEI, no replay/reentry); hashOperation=keccak(abi.encode) collision-safe; salt=proposalId unique; atomic batch. NO permissionless break, NO double-exec. Residual is ALL DESIGN/HANDOFF: EXEC-1 (High-design) NO CANCELLER — a passed-but-malicious/buggy batch is unstoppable on-chain once scheduled (only the 7d delay to react). EXEC-2 (Medium) IMMUTABLE proposer — a buggy Governor cannot be replaced without redeploy + full re-handoff. EXEC-3 (Medium) 7d MIN_DELAY is the ONLY reaction window + only emergency lever. EXEC-4 (Low) permissionless direct execute() desyncs Governor.p.executed (cosmetic; actions still run exactly once; fix pre-handoff by gating to PROPOSER or reconciling). EXEC-5 (Low) no expiry. These are deliberate credible-neutrality trade-offs the user must consciously accept for the irreversible handoff."
+  },
+  "liveConfig": {
+    "MIN_DELAY": "604800 (7 days)",
+    "isProposer(Governor 0x4548...)": true,
+    "isProposer(KMS 0x8310eA7E)": false,
+    "handoffStatus": "NOT YET DONE — the Executor holds DEFAULT_ADMIN on NONE of VCO/VYT/VRT (KMS still holds all). Governance is armed but not yet live; findings can still be fixed by redeploy before the irreversible role transfer."
+  }
+}

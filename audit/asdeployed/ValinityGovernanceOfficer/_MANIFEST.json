@@ -1,0 +1,32 @@
+{
+  "contract": "ValinityGovernanceOfficer (the Governor — dual-chamber stake-to-vote)",
+  "address": "0x4548963212390B1E44eFc69BcC672dd84d09bbA1",
+  "role": "THE HANDOFF DESTINATION (governance side). The only PROPOSER on the Executor timelock. Two-stage voting (VGC draft chamber → VY execution chamber) gates every action the Executor will perform on the governed contracts.",
+  "deployment": "NON-PROXY / NON-UPGRADEABLE (plain contract + ReentrancyGuard; all links immutable; NO admin roles). 11,854 B.",
+  "constructorArgs": ["vgc=0xe595309a (VGC)", "vy=0x597b2952 (VY)", "vrt=0x06087789 (VRT)", "vyt=0xe58E29c9 (VYT)", "executor=0x710AE211 (ValinityExecutor)", "vyo=0xA245C9D2 (premium registry)", "vsr=0x664b3A81 (staking router)"],
+  "sourceVerification": {
+    "method": "metadata-IPFS gold standard (both legs): live runtime deployedBytecode metadata == hardhat artifact metadata, AND build-info embedded source keccak256 == workspace .sol keccak256",
+    "liveMetadataIpfs": "1220303368059a7c30916c000f1cca87c6cf41e40e0ecdd98c33b88a8655c79e6bed",
+    "artifactMetadataIpfs": "1220303368059a7c30916c000f1cca87c6cf41e40e0ecdd98c33b88a8655c79e6bed (IDENTICAL to live)",
+    "buildInfoSourceKeccak_eq_workspace": true,
+    "buildInfo": "3221a1b0b43ccbf2b51e09a8a8f36855.json",
+    "matchedSource": "contracts/governance/ValinityGovernanceOfficer.sol (818 lines; git-M deployed-from-workspace, workspace==live)",
+    "solc": "0.8.27", "optimizer": { "enabled": true, "runs": 100 }, "evmVersion": "cancun", "liveBytes": 11854
+  },
+  "audit": {
+    "workflow": "wapagthnp (joint Governor+Executor, 6 dimensions, adversarial 2-skeptic default-refute)",
+    "design": "Stage1 (VGC): propose (>=1% VGC) → support/oppose 7d → promote needs premiumYES + 50% VGC quorum + 51% majority. Stage2 (VY): 7d vote → queue needs premiumYES + 50% circulating-VY quorum + 70% supermajority. queue→executor.schedule; execute→executor.execute (both re-check hashActions==actionsHash). Weight = liquid escrow (locked until window end) + VSR-staked principal (counted once, only stakes with unlockTime>windowEnd) → flash-loan-resistant. One proposal in-flight; 7d post-failure proposer cooldown.",
+    "verdict_RECONCILED": "✅ SAFETY PROVEN: vote integrity SOUND — no double-vote/flash-loan/cross-wallet double-count (VGO-VOTE-5; lockups + stakeCounted + unlockTime>windowEnd); escrow can't be stolen/drained, withdrawal self-only + balance-checked (ESC-3/4); both-chamber + premium + queue/execute action-hash binding enforced (GOV-TALLY-3); dual-chamber dual-supermajority flash-resistant & stronger than single vote (GCE-5). 0 fund-theft, 0 vote-forgery. THE REAL RISKS ARE LIVENESS/RIGIDITY: **GCE-1/VGO-VOTE-1 (HIGH, permissionless DoS)** — the single in-flight slot is monopolizable with ~1-2% VGC via fresh proposer EOAs (cooldown is per-msg.sender, trivially dodged) → can perpetually block ALL governance; FIX BEFORE HANDOFF. GOV-TALLY-1 (Medium, perm) quorum denominator shrinkable at attacker-timed promote() (bounded — can't beat the 70% supermajority). GCE-3 (Medium) 50% quorum is strong anti-capture but a turnout dependency; capture collapses to whoever holds ~50% VY + ~50% VGC; premium gate is a single-wallet binary. Lows: VGO-VOTE-2 premium gate cheap (anti-spam only); VGO-VOTE-3/ESC-1 VY-fee-whitelist dependency (governance could de-whitelist itself post-handoff → escrow under-fund/weight over-count); ESC-2 self-relock (delay, not loss); GOV-TALLY-4 no Governor-side veto once Succeeded. Escrow VY-fee dependency SATISFIED today (VY.isWhitelisted(Governor)=true). Workflow wapagthnp: 27 raw→21 surv/6 ref, 0 fund-loss/vote-forgery."
+  },
+  "liveConfig": {
+    "proposalCount": 0, "activeProposalId": 0,
+    "circulatingVY": "~418,003 VY (= totalSupply 17,935,219 - VRT 10,438,187 - VYT 7,079,030)",
+    "VGC_totalSupply": "~1,020,295",
+    "draftThreshold_1pct": "~10,203 VGC",
+    "stage2_quorum_50pct": "~209,001 VY must vote",
+    "stage1_quorum_50pct": "~510,147 VGC must vote",
+    "VY.isWhitelisted(Governor)": "true (fee-exemption dependency for escrow accounting — SATISFIED)",
+    "thresholds": "DRAFT_THRESHOLD 1%, DRAFT_QUORUM 50%, DRAFT_MAJORITY 51%, VY_QUORUM 50%, VY_PASS 70%; DRAFT/VOTING/PROMOTION/PENALTY periods all 7 days",
+    "handoffStatus": "NOT YET DONE — Executor is not yet admin of the governed contracts; KMS still holds all admin roles."
+  }
+}

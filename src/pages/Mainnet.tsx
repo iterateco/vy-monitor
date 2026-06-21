@@ -771,42 +771,56 @@ const fetchData = async () => {
     );
   }
 
-  // --- Round Floor (USD per VY backing across VRT collateral + VRYO-deployed) ---
-  // Numerator: Σ USD value of VRT collateral (VCO leg) + Σ USD value of the asset
-  //   VRYO deployed into DAX (VRYO leg) — both precomputed per asset.
-  // Denominator: Σ caps in VCO + Total VY Deployed (VRYO caps).
+  // --- Round Floor (lowest per-asset global floor: USD backing per VY) ---
+  // Each collateral asset carries a "global floor" = (VRYO-deployed asset + VRT
+  // reserve) USD ÷ global cap (its `globalLTVF`). The Round Floor is the *lowest*
+  // of these — the weakest-backed asset sets the redemption floor for the round,
+  // so a well-backed asset can't mask a thin one the way a blended average would.
+  // Assets with no global cap, or a stale oracle (spotPrice 0 ⇒ backing can't be
+  // valued), are skipped rather than dragging the floor to a false zero.
+  let roundFloor: Amount<bigint> | 'Unavailable' = 'Unavailable';
+  for (const a of assets) {
+    if (!a.isCollateral) continue;
+    if ((a.globalCap.value as bigint) <= 0n) continue;
+    if ((a.spotPrice.value as bigint) <= 0n) continue;
+    const floor = a.globalLTVF.value as bigint;
+    if (roundFloor === 'Unavailable' || floor < (roundFloor.value as bigint)) {
+      roundFloor = a.globalLTVF;
+    }
+  }
 
+  // vrtCollateralUSD (VRT collateral USD) still feeds CLAV / liquid-assets below.
   let vrtCollateralUSD = 0n;
   for (const a of assets) {
     if (!a.isCollateral) continue;
     vrtCollateralUSD += a.reserveBalanceUSD.value as bigint;
   }
 
-  // VRYO-deployed assets back the VRYO caps (totalDeployedVY) in the floor
-  // denominator. With the V3 redesign VRYO injects the asset into the DAX pool
-  // reserve, so each asset's `deployedBalanceUSD` is the live backing for the
-  // VRYO leg. (This value also sits inside daxTVL — see the TVL note below.)
-  let lpHoldingsUSD = 0n;
-  for (const a of assets) {
-    if (!a.isCollateral) continue;
-    lpHoldingsUSD += a.deployedBalanceUSD.value as bigint;
-  }
-
-  const roundFloorDenominator = totalCaps + totalDeployedVY;
-  const roundFloor: Amount<bigint> | 'Unavailable' = roundFloorDenominator > 0n
-    ? new Amount(USD, ((vrtCollateralUSD + lpHoldingsUSD) * 10n ** 18n) / roundFloorDenominator)
-    : 'Unavailable' as never;
-
   // VRYO no longer holds standalone Uniswap V3 LP NFTs; its deployed assets live
   // inside the DAX pool reserves, so they're already counted in daxTVL. Do NOT
-  // add lpHoldingsUSD here or it would double-count against DAX TVL (it is only
-  // surfaced separately in the Round Floor numerator above, which ignores TVL).
+  // add the VRYO-deployed USD here or it would double-count against DAX TVL (it
+  // only feeds each asset's globalLTVF, which the Round Floor reads above).
   const daxTVL = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
   tvl += daxTVL;
 
-  // Liquid assets = VRT collateral + DAX non-VY reserves (incl. VRYO-deployed) + USDC pool
+  // --- CLAV (Current Liquid Assets Value) ---
+  // Fiat value of the real, non-protocol collateral that actually backs the
+  // system — the live liquidity in WETH/WBTC/PAXG + USDC. We count only the
+  // asset side of each venue and EXCLUDE every VY and VGC, plus any synthetic
+  // asset (the DAX prices those in VY-equivalent terms, so they are VY value):
+  //   • VRT      → reserveBalanceUSD per collateral asset (already collateral-only)
+  //   • main DAX → asset side of each VY/collateral pool (synthetics filtered out)
+  //   • VDAODAX  → external-asset side of each pool (only known collateral is priced)
+  //   • Uni pool → the USDC side of VY/USDC (the VY side is excluded)
+  const collateralAddrs = new Set(
+    assets.filter(a => a.isCollateral).map(a => a.address.toLowerCase())
+  );
+  const daxCollateralUSD = daxPools.reduce((sum, p) =>
+    collateralAddrs.has(p.asset.toLowerCase()) ? sum + (p.reserveAssetUSD.value as bigint) : sum, 0n);
+  const vdaoDaxCollateralUSD = vdaoDaxPools.reduce((sum, p) =>
+    collateralAddrs.has(p.asset.toLowerCase()) ? sum + ((p.reserveAssetUSD?.value as bigint) ?? 0n) : sum, 0n);
   const usdcPoolUSD = usdcReserve * 10n ** 12n; // 6→18 decimal, USDC ≈ $1
-  const liquidAssetsUSD = vrtCollateralUSD + daxTVL + usdcPoolUSD;
+  const liquidAssetsUSD = vrtCollateralUSD + daxCollateralUSD + vdaoDaxCollateralUSD + usdcPoolUSD;
 
   return {
     circulatingSupply: new Amount(VY, totalUncollateralized),
