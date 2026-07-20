@@ -771,23 +771,27 @@ const fetchData = async () => {
     );
   }
 
-  // --- Round Floor (lowest per-asset global floor: USD backing per VY) ---
+  // --- Round Floor (mean per-asset global floor: USD backing per VY) ---
   // Each collateral asset carries a "global floor" = (VRYO-deployed asset + VRT
-  // reserve) USD ÷ global cap (its `globalLTVF`). The Round Floor is the *lowest*
-  // of these — the weakest-backed asset sets the redemption floor for the round,
-  // so a well-backed asset can't mask a thin one the way a blended average would.
+  // reserve) USD ÷ global cap (its `globalLTVF`). The Round Floor is the *average*
+  // of these across WETH/WBTC/PAXG — a blended view of backing per VY rather than
+  // the worst case, so a thin asset does not by itself define the round. Note this
+  // means a well-backed asset can lift the figure above the weakest leg's backing.
   // Assets with no global cap, or a stale oracle (spotPrice 0 ⇒ backing can't be
-  // valued), are skipped rather than dragging the floor to a false zero.
-  let roundFloor: Amount<bigint> | 'Unavailable' = 'Unavailable';
+  // valued), are excluded from the average rather than averaged in as a false zero
+  // — with PAXG's thin pool the divisor is legitimately 2 some of the time.
+  let floorSum = 0n;
+  let floorCount = 0n;
   for (const a of assets) {
     if (!a.isCollateral) continue;
     if ((a.globalCap.value as bigint) <= 0n) continue;
     if ((a.spotPrice.value as bigint) <= 0n) continue;
-    const floor = a.globalLTVF.value as bigint;
-    if (roundFloor === 'Unavailable' || floor < (roundFloor.value as bigint)) {
-      roundFloor = a.globalLTVF;
-    }
+    floorSum += a.globalLTVF.value as bigint;
+    floorCount += 1n;
   }
+  const roundFloor: Amount<bigint> | 'Unavailable' = floorCount > 0n
+    ? new Amount(USD, floorSum / floorCount)
+    : 'Unavailable';
 
   // vrtCollateralUSD (VRT collateral USD) still feeds CLAV / liquid-assets below.
   let vrtCollateralUSD = 0n;
