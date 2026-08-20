@@ -13,7 +13,15 @@ export const CONTRACT_ACRONYMS: Record<string, string> = {
   ValinityReserveTreasury: 'VRT',
   ValinityCapOfficer: 'VCO',
   ValinityLoanOfficer: 'VLO',
+  ValinityBalanceSheetOfficer: 'VBSO',
+  // Same address as the former Acquisition Officer — it is now the Asset Oracle.
+  // Old "VAO" dashboards mean the opposite thing.
+  ValinityAssetOracle: 'VAO',
   ValinityAcquisitionOfficer: 'VAO',
+  ValinityMarketStabilityOfficer: 'VMSO',
+  ValinityMarketMakerOfficer: 'VMMO',
+  VyTwapOracle: 'VY TWAP',
+  LoanLens: 'Lens',
   ValinityPortal: 'VP',
   VDAX: 'VDAX',
   ValinityDAX: 'VDAX',

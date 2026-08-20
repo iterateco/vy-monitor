@@ -5,8 +5,9 @@ import { useEffect, useState, type JSX } from 'react';
 import { createPublicClient, http, parseAbiItem, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
-import { CONTRACT_ACRONYMS, MAINNET_RPC_URL, MAINNET_API_URL } from '../config';
-import { Amount, USD, VY, VDAX, UNI_LP } from '../models';
+import { BackingTiles } from '../components/BalanceSheet';
+import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
+import { Amount, USD, VY } from '../models';
 import type { Currency } from '../models';
 import networks from '../networks';
 
@@ -17,23 +18,13 @@ import networks from '../networks';
  */
 const COLLATERAL_SYMBOLS = new Set(['WETH', 'WBTC', 'PAXG']);
 
-/**
- * Cap Health dust tolerance, in VY wei (1 VY = 1e18 wei).
- * Total caps should equal circulating supply exactly, but integer-division
- * truncation in cap accounting can leave a few wei of rounding dust (each cap
- * mutation floors down by ≤1 wei). A strict `=== 0n` check flags that harmless
- * dust as a 🔴 mismatch. We allow up to this many wei of |lag| before alerting.
- *
- * Kept deliberately tiny for safety: 1e3 wei = 1e-15 VY — 15 orders of magnitude
- * below 1 VY, so any economically meaningful mismatch (sub-VY or larger) still
- * trips the alert, while ~1000 single-wei truncations are absorbed.
- */
-const CAP_HEALTH_DUST_WEI = 1_000n;
-
 const client = createPublicClient({
   chain: mainnet,
   transport: http(MAINNET_RPC_URL),
 });
+
+/** VBSO proxy — the company balance sheet. */
+const VBSO_ADDRESS = '0xDFd145401122d62987c6a363e370F4DB759BE1b4' as const;
 
 const fetchData = async () => {
   const networkName = 'mainnet';
@@ -52,14 +43,6 @@ const fetchData = async () => {
   const vcoConfig = getContractConfig('ValinityCapOfficer');
   const vloConfig = getContractConfig('ValinityLoanOfficer');
   const daxConfig = getContractConfig('ValinityDAX');
-  const vsrConfig = getContractConfig('ValinityStakingRouter');
-  const vryoConfig = getContractConfig('ValinityReserveYieldOfficer');
-
-  const effectiveFloorResult = await client.readContract({
-    ...vcoConfig,
-    functionName: 'effectiveFloor',
-  }).catch(() => 0n);
-  const effectiveFloor = effectiveFloorResult as bigint;
 
   const assets = await Promise.all(assetEntries.map(async ([assetKey, assetAddr]) => {
     const tokenConfig = getContractConfig('ERC20', assetAddr);
@@ -71,19 +54,14 @@ const fetchData = async () => {
       { ...tokenConfig, functionName: 'symbol' },
     ];
 
-    // Collateral-only calls: spotPrice, assetView, assetMetrics, + VRYO per-asset
-    // allocator state (folded into the asset card; VRYO has no standalone section).
+    // Collateral-only calls. The VCO cap/metrics and VRYO allocator reads that used
+    // to live here were deleted with the Valinity Reserves panel: they fed only that
+    // panel, and on-chain they now return zeros (every hard asset left the VRT).
+    // Spot price still feeds DAX/VDAODAX/VMMO valuation; getAssetView still feeds
+    // the loan totals.
     const collateralContracts = isCollateral ? [
       { ...vaoConfig, functionName: 'getAssetTwapPrice', args: [assetAddr] },
       { ...vloConfig, functionName: 'getAssetView', args: [assetAddr] },
-      { ...vcoConfig, functionName: 'getAssetMetrics', args: [assetAddr] },
-      { ...vcoConfig, functionName: 'getAssetCollateralized', args: [assetAddr] },
-      { ...vcoConfig, functionName: 'getAssetCap', args: [assetAddr] },
-      { ...vryoConfig, functionName: 'capVRYO', args: [assetAddr] },
-      { ...vryoConfig, functionName: 'deployedAsset', args: [assetAddr] },
-      { ...vryoConfig, functionName: 'assetDeployRatioBps', args: [assetAddr] },
-      { ...vryoConfig, functionName: 'getGlobalCap', args: [assetAddr] },
-      { ...vryoConfig, functionName: 'getInternalLTV', args: [assetAddr] },
     ] : [];
 
     const results = await client.multicall({
@@ -98,7 +76,7 @@ const fetchData = async () => {
       if (r.status === 'success') return r.result as T;
       // For collateral: spot price / LTVF reverts are warnings (pool not configured), not errors
       const msg = `${label}: ${(r.error as Error).message ?? 'reverted'}`;
-      const warnLabels = ['getAssetTwapPrice', 'getAssetMetrics', 'capVRYO', 'deployedAsset', 'assetDeployRatioBps', 'getGlobalCap', 'getInternalLTV'];
+      const warnLabels = ['getAssetTwapPrice'];
       if (warnLabels.includes(label)) {
         warnings.push(msg);
       } else {
@@ -121,66 +99,21 @@ const fetchData = async () => {
         errors,
         warnings,
         spotPrice: new Amount(USD, 0n),
-        LTV: 0n,
-        LTVF: new Amount(USD, 0n),
-        reserveBalance: new Amount(currency, 0n),
-        reserveBalanceUSD: new Amount(USD, 0n),
         totalLoaned: new Amount(currency, 0n),
         totalLoanedUSD: new Amount(USD, 0n),
-        cap: new Amount(VY, 0n),
-        capFloor: new Amount(VY, 0n),
-        collateralized: new Amount(VY, 0n),
-        // VRYO per-asset allocator fields (zero for non-collateral / unmanaged)
-        targetDeployRatio: '—',
-        deployedRatio: '—',
-        globalCap: new Amount(VY, 0n),
-        globalLTV: 0n,
-        globalLTVF: new Amount(USD, 0n),
-        vryoCap: new Amount(VY, 0n),
-        vryoLTV: 0n,
-        vryoLTVF: new Amount(USD, 0n),
-        deployedBalance: new Amount(currency, 0n),
-        deployedBalanceUSD: new Amount(USD, 0n),
         notCollateral: true
       }
     }
 
-    // Collateral asset — parse remaining results (indices 2..6)
+    // Collateral asset — parse remaining results (indices 2..3)
     const spotPrice = get(2, 'getAssetTwapPrice', 0n);
     const assetView = results[3].status === 'success'
       ? results[3].result as unknown as { ltv: bigint; reserveBalance: bigint; totalLoaned: bigint }
       : (() => { errors.push(`getAssetView: ${(results[3].error as Error).message ?? 'reverted'}`); return { ltv: 0n, reserveBalance: 0n, totalLoaned: 0n }; })();
-    const { reserveBalance, totalLoaned } = assetView;
-    const defaultMetrics = { totalReserve: 0n, collateralCap: 0n, ltvRatio: 0n, ltvF: 0n, utilized: 0n, available: 0n };
-    const metrics = results[4].status === 'success'
-      ? results[4].result as unknown as typeof defaultMetrics
-      : (() => { warnings.push(`getAssetMetrics: ${(results[4].error as Error).message ?? 'reverted'}`); return defaultMetrics; })();
-    const { ltvRatio: ltv, ltvF: ltvf, collateralCap: metricsCap, utilized } = metrics;
-    // getAssetMetrics reverts when the VAO TWAP oracle is stale (e.g. PAXG's thin
-    // pool reverts "OLD"), which would zero collateralCap and trip a false
-    // cap-circulating mismatch. Fall back to the raw getAssetCap storage read,
-    // which never touches the oracle, so the cap total stays correct.
-    const rawCap = get(6, 'getAssetCap', 0n);
-    const cap = results[4].status === 'success' ? metricsCap : rawCap;
-    const collateralized = get(5, 'getAssetCollateralized', utilized);
-
-    // VRYO per-asset allocator state (idx 7..11).
-    const vryoCap = get(7, 'capVRYO', 0n);
-    const deployedBalance = get(8, 'deployedAsset', 0n);
-    const targetRatioBps = Number(get(9, 'assetDeployRatioBps', 0));
-    const globalCap = get(10, 'getGlobalCap', 0n);   // = vryoCap + VCO cap
-    const vryoLTV = get(11, 'getInternalLTV', 0n);   // deployedAsset ÷ vryoCap (asset18-per-VY, WAD)
+    const { totalLoaned } = assetView;
 
     const scaleFactor = BigInt(10) ** BigInt(18 - decimals);
     const toUSD = (native: bigint) => spotPrice ? ((native * scaleFactor) * spotPrice) / BigInt(1e18) : 0n;
-    const toLTVF = (ltvWad: bigint) => (ltvWad * spotPrice) / BigInt(1e18); // asset-per-VY × USD/asset = USD/VY
-
-    // Deployed ratio: actual deployed share of the global cap (capVRYO ÷ globalCap).
-    const deployedRatioPct = globalCap > 0n ? Number((vryoCap * 10000n) / globalCap) / 100 : 0;
-    // Global LTV: (VRYO-deployed asset + VRT reserve asset) ÷ global cap, asset18-per-VY (WAD).
-    const globalLTV = globalCap > 0n
-      ? (((deployedBalance + reserveBalance) * scaleFactor) * BigInt(1e18)) / globalCap
-      : 0n;
 
     return {
       symbol,
@@ -190,26 +123,9 @@ const fetchData = async () => {
       errors,
       warnings,
       spotPrice: new Amount(USD, spotPrice),
-      LTV: ltv,
-      LTVF: new Amount(USD, ltvf),
-      reserveBalance: new Amount(currency, reserveBalance),
-      reserveBalanceUSD: new Amount(USD, toUSD(reserveBalance)),
       totalLoaned: new Amount(currency, totalLoaned),
       totalLoanedUSD: new Amount(USD, toUSD(totalLoaned)),
-      cap: new Amount(VY, cap),
-      capFloor: new Amount(VY, effectiveFloor),
-      collateralized: new Amount(VY, collateralized),
-      // VRYO per-asset allocator fields
-      targetDeployRatio: `${(targetRatioBps / 100).toFixed(2)}%`,
-      deployedRatio: `${deployedRatioPct.toFixed(2)}%`,
-      globalCap: new Amount(VY, globalCap),
-      globalLTV,
-      globalLTVF: new Amount(USD, toLTVF(globalLTV)),
-      vryoCap: new Amount(VY, vryoCap),
-      vryoLTV,
-      vryoLTVF: new Amount(USD, toLTVF(vryoLTV)),
-      deployedBalance: new Amount(currency, deployedBalance),
-      deployedBalanceUSD: new Amount(USD, toUSD(deployedBalance)),
+      notCollateral: false,
     }
   }));
 
@@ -224,7 +140,7 @@ const fetchData = async () => {
   ] as const;
   const pairConfig = { abi: pairAbi, address: pairAddress };
 
-  const [overviewResults, mtpResponse, stakingStatsResponse] = await Promise.all([
+  const [overviewResults] = await Promise.all([
     client.multicall({
       contracts: [
         { ...vyTokenConfig, functionName: 'totalSupply' },
@@ -233,18 +149,11 @@ const fetchData = async () => {
       ],
       allowFailure: true
     }),
-    fetch(`${MAINNET_API_URL}/market-data?count=1`).then(r => r.json()).catch(() => null),
-    fetch(`${MAINNET_API_URL}/staking/stats`).then(r => r.json()).catch(() => null),
   ]);
 
   const vyTotalSupply = overviewResults[0].status === 'success'
     ? overviewResults[0].result as bigint
     : (() => { overviewErrors.push(`totalSupply: ${(overviewResults[0].error as Error).message ?? 'reverted'}`); return 0n; })();
-  const mtpPrice = mtpResponse?.data?.[0]?.market_trigger_price;
-  const mtp = mtpPrice != null
-    ? new Amount(USD, BigInt(Math.round(parseFloat(mtpPrice) * 1e18)))
-    : (() => { overviewWarnings.push(`MTP: Could not fetch from API`); return 'Unavailable' as const; })();
-
   const USDC: Currency = { symbol: 'USDC', decimals: 6 };
   let vyReserve = 0n;
   let usdcReserve = 0n;
@@ -300,15 +209,9 @@ const fetchData = async () => {
     balanceMap.ValinityReserveTreasury[0].value
   );
 
-  const totalCaps = assets
-    .filter(a => a.isCollateral)
-    .reduce((sum, a) => sum + (a.cap.value as bigint), 0n);
-  // Cap-circulating health is recomputed below once totalDeployedVY is known (caps lowered
-  // from VCO are expected to reappear as deployed VY in VRYO/VLM).
-
   let tvl = 0n;
   for (const asset of assets) {
-    tvl += (asset.reserveBalanceUSD.value as bigint) + (asset.totalLoanedUSD.value as bigint);
+    tvl += asset.totalLoanedUSD.value as bigint;
   }
 
   // Check if any collateral asset has config warnings (pools not ready)
@@ -489,211 +392,18 @@ const fetchData = async () => {
     }
   }
 
-  // --- Staking Router ---
-  const vsrErrors: string[] = [];
-  const vsrResults = await client.multicall({
-    contracts: [
-      { ...vsrConfig, functionName: 'totalStakedVY' },
-      { ...vsrConfig, functionName: 'totalDaxCredits' },
-      { ...vsrConfig, functionName: 'totalUniCredits' },
-      { ...vsrConfig, functionName: 'daxIndex' },
-      { ...vsrConfig, functionName: 'uniIndex' },
-      { ...vsrConfig, functionName: 'depositsPaused' },
-      { ...vsrConfig, functionName: 'withdrawalsPaused' },
-    ],
-    allowFailure: true
-  });
-
-  const vsrGet = <T,>(idx: number, label: string, fallback: T): T => {
-    const r = vsrResults[idx];
-    if (r.status === 'success') return r.result as T;
-    vsrErrors.push(`${label}: ${(r.error as Error).message ?? 'reverted'}`);
-    return fallback;
-  };
-
-  const totalStakedVY = vsrGet(0, 'totalStakedVY', 0n);
-  const totalDaxCredits = vsrGet(1, 'totalDaxCredits', 0n);
-  const totalUniCredits = vsrGet(2, 'totalUniCredits', 0n);
-  const daxIndex = vsrGet(3, 'daxIndex', 0n);
-  const uniIndex = vsrGet(4, 'uniIndex', 0n);
-  const vsrDepositsPaused = vsrGet(5, 'depositsPaused', false);
-  const vsrWithdrawalsPaused = vsrGet(6, 'withdrawalsPaused', false);
-
-  // --- Router Token Holdings ---
-  const routerAddress = (addresses as Record<string, Address>)['ValinityStakingRouter'];
-  const vdaxAddress = (addresses as Record<string, Address>)['VDAX'];
-  const daxAddress = (addresses as Record<string, Address>)['ValinityDAX'];
-  const routerBalanceResults = await client.multicall({
-    contracts: [
-      { abi: abis.ERC20, address: vdaxAddress, functionName: 'balanceOf', args: [routerAddress] },
-      { abi: abis.ERC20, address: pairAddress, functionName: 'balanceOf', args: [routerAddress] },
-      { ...vyTokenConfig, functionName: 'balanceOf', args: [daxAddress] },
-      { ...vyTokenConfig, functionName: 'balanceOf', args: [pairAddress] },
-      { abi: abis.ERC20, address: vdaxAddress, functionName: 'totalSupply' },
-      { abi: abis.ERC20, address: pairAddress, functionName: 'totalSupply' },
-    ],
-    allowFailure: true
-  });
-  const routerVDAX = routerBalanceResults[0].status === 'success' ? routerBalanceResults[0].result as bigint : (() => { vsrErrors.push('VDAX.balanceOf(router): reverted'); return 0n; })();
-  const routerUniLP = routerBalanceResults[1].status === 'success' ? routerBalanceResults[1].result as bigint : (() => { vsrErrors.push('UNI-LP.balanceOf(router): reverted'); return 0n; })();
-  const vyInDax = routerBalanceResults[2].status === 'success' ? routerBalanceResults[2].result as bigint : (() => { vsrErrors.push('VY.balanceOf(DAX): reverted'); return 0n; })();
-  const vyInPair = routerBalanceResults[3].status === 'success' ? routerBalanceResults[3].result as bigint : (() => { vsrErrors.push('VY.balanceOf(pair): reverted'); return 0n; })();
-  const vdaxTotalSupply = routerBalanceResults[4].status === 'success' ? routerBalanceResults[4].result as bigint : (() => { vsrErrors.push('VDAX.totalSupply: reverted'); return 0n; })();
-  const uniLpTotalSupply = routerBalanceResults[5].status === 'success' ? routerBalanceResults[5].result as bigint : (() => { vsrErrors.push('UNI-LP.totalSupply: reverted'); return 0n; })();
-  // Pro-rata share of VY in each pool that belongs to the staking router
-  const routerVYInDax = vdaxTotalSupply > 0n ? (vyInDax * routerVDAX) / vdaxTotalSupply : 0n;
-  const routerVYInPair = uniLpTotalSupply > 0n ? (vyInPair * routerUniLP) / uniLpTotalSupply : 0n;
-  const vyInPools = routerVYInDax + routerVYInPair;
-
-  // --- Staking System Debt (principal + accrued-but-unpaid yield, per asset) ---
-  // The protocol's outstanding liability to stakers, grouped so every stake of
-  // the same asset is summed together. Two stake kinds:
-  //   • VY stakes  → principal is the aggregate `totalStakedVY`; accrued-unpaid
-  //                  yield is Σ VYO.pendingYield(user, stakeId) over each user's
-  //                  currently-active stakes.
-  //   • Asset stakes → principal is the aggregate VSR.totalPrincipalByAsset(asset)
-  //                  (asset-native units); accrued-unpaid yield is
-  //                  Σ VYO.pendingAssetYield(user, stakeId) grouped by asset.
-  // No on-chain aggregate of yield-owed exists, so stakers are enumerated from
-  // the VSR deposit events and each active stake's pending yield is read live.
-  const vyoConfig = getContractConfig('ValinityYieldOfficer');
-  const vsrDepositEvent = parseAbiItem('event Deposit(address indexed user, uint8 stakeId, uint256 vyAmount, uint8 tierId, uint256 vdaxMinted, uint256 uniMinted, uint256 daxCreditsAdd, uint256 uniCreditsAdd)');
-  const assetStakeDepositedEvent = parseAbiItem('event AssetStakeDeposited(address indexed user, uint256 indexed stakeId, address indexed asset, uint256 principalAsset, uint8 tier, uint256 lpAmount, bool isUniLP)');
-
-  const [vyDepositLogs, assetDepositLogs] = await Promise.all([
-    client.getLogs({ address: vsrConfig.address, event: vsrDepositEvent, fromBlock: 0n, toBlock: 'latest' }),
-    client.getLogs({ address: vsrConfig.address, event: assetStakeDepositedEvent, fromBlock: 0n, toBlock: 'latest' }),
-  ]);
-
-  // VY stakes: accrued-unpaid yield over every active stake of every VY staker.
-  const vyStakers = [...new Set(vyDepositLogs.map(l => l.args.user as Address))];
-  let vyPendingYield = 0n;
-  if (vyStakers.length > 0) {
-    const activeStakesResults = await client.multicall({
-      contracts: vyStakers.map(u => ({ ...vyoConfig, functionName: 'getActiveStakes', args: [u] })),
-      allowFailure: true,
-    });
-    const vyPendingCalls: { user: Address; stakeId: number }[] = [];
-    vyStakers.forEach((u, i) => {
-      const r = activeStakesResults[i];
-      if (r.status === 'success') {
-        for (const id of r.result as unknown as readonly number[]) vyPendingCalls.push({ user: u, stakeId: Number(id) });
-      } else {
-        vsrErrors.push(`VYO.getActiveStakes(${u}): ${(r.error as Error).message ?? 'reverted'}`);
-      }
-    });
-    if (vyPendingCalls.length > 0) {
-      const vyPendingResults = await client.multicall({
-        contracts: vyPendingCalls.map(c => ({ ...vyoConfig, functionName: 'pendingYield', args: [c.user, c.stakeId] })),
-        allowFailure: true,
-      });
-      vyPendingYield = vyPendingResults.reduce((s, r) => s + (r.status === 'success' ? r.result as bigint : 0n), 0n);
-    }
-  }
-
-  // Asset stakes: dedupe (user, stakeId) — stakeIds are monotonic so each pair is
-  // unique, but inactive (withdrawn) stakes return 0 yield by design.
-  const assetStakeKeys = assetDepositLogs.map(l => ({
-    user: l.args.user as Address,
-    stakeId: l.args.stakeId as bigint,
-    asset: l.args.asset as Address,
-  }));
-  const seenAssetStake = new Set<string>();
-  const uniqueAssetStakes = assetStakeKeys.filter(k => {
-    const key = `${k.user}-${k.stakeId}`;
-    if (seenAssetStake.has(key)) return false;
-    seenAssetStake.add(key);
-    return true;
-  });
-
-  const yieldByAsset = new Map<Address, bigint>();
-  if (uniqueAssetStakes.length > 0) {
-    const assetPendingResults = await client.multicall({
-      contracts: uniqueAssetStakes.map(k => ({ ...vyoConfig, functionName: 'pendingAssetYield', args: [k.user, k.stakeId] })),
-      allowFailure: true,
-    });
-    uniqueAssetStakes.forEach((k, i) => {
-      const r = assetPendingResults[i];
-      const y = r.status === 'success' ? r.result as bigint : 0n;
-      yieldByAsset.set(k.asset, (yieldByAsset.get(k.asset) ?? 0n) + y);
-    });
-  }
-
-  // Per-asset principal (aggregate) + native-unit metadata for display.
-  const stakedAssets = [...new Set(assetStakeKeys.map(k => k.asset))];
-  const assetDebtRows: { symbol: string; principal: Amount<bigint>; yieldOwed: Amount<bigint> }[] = [];
-  if (stakedAssets.length > 0) {
-    const assetMetaResults = await client.multicall({
-      contracts: stakedAssets.flatMap(a => [
-        { ...vsrConfig, functionName: 'totalPrincipalByAsset', args: [a] },
-        { abi: abis.ERC20, address: a, functionName: 'decimals' },
-        { abi: abis.ERC20, address: a, functionName: 'symbol' },
-      ]),
-      allowFailure: true,
-    });
-    stakedAssets.forEach((a, i) => {
-      const principalR = assetMetaResults[i * 3];
-      const decimalsR = assetMetaResults[i * 3 + 1];
-      const symbolR = assetMetaResults[i * 3 + 2];
-      const principal = principalR.status === 'success' ? principalR.result as bigint : 0n;
-      const decimals = decimalsR.status === 'success' ? Number(decimalsR.result) : 18;
-      const symbol = symbolR.status === 'success' ? symbolR.result as string : a.slice(0, 8);
-      const cur: Currency = { symbol, decimals };
-      assetDebtRows.push({
-        symbol,
-        principal: new Amount(cur, principal),
-        yieldOwed: new Amount(cur, yieldByAsset.get(a) ?? 0n),
-      });
-    });
-  }
-
-  // VY stakes lead the table (principal = the live aggregate totalStakedVY).
-  const stakingDebtRows = [
-    { symbol: 'VY', principal: new Amount(VY, totalStakedVY), yieldOwed: new Amount(VY, vyPendingYield) },
-    ...assetDebtRows,
-  ];
-
-  // --- Treasury Solvency (over-collateralization invariant) ---
-  // The protocol pays yield (and tops up principal shortfalls) from VYT, and the
-  // Yield Officer only lets payouts continue while
-  //   VYT.getAvailableForYield() >= VYO.totalPromisedYield()
-  // Both are VY-denominated. `totalPromisedYield` is the system's full reserved
-  // debt (committed-but-unpaid yield + the 2× principal-protection reservation),
-  // a superset of the accrued yield shown per-asset above — so a green check here
-  // proves every row of the debt table is covered. (Principal itself is LP-backed
-  // in the router; VYT only stands behind yield + shortfalls.)
-  const vytConfig = getContractConfig('ValinityYieldTreasury');
-  const solvencyResults = await client.multicall({
-    contracts: [
-      { ...vytConfig, functionName: 'getBalance' },
-      { ...vytConfig, functionName: 'getAvailableForYield' },
-      { ...vyoConfig, functionName: 'totalPromisedYield' },
-    ],
-    allowFailure: true,
-  });
-  const vytBalance = solvencyResults[0].status === 'success' ? solvencyResults[0].result as bigint : (() => { vsrErrors.push('VYT.getBalance: reverted'); return 0n; })();
-  const vytAvailableForYield = solvencyResults[1].status === 'success' ? solvencyResults[1].result as bigint : (() => { vsrErrors.push('VYT.getAvailableForYield: reverted'); return 0n; })();
-  const totalPromisedYield = solvencyResults[2].status === 'success' ? solvencyResults[2].result as bigint : (() => { vsrErrors.push('VYO.totalPromisedYield: reverted'); return 0n; })();
-  const solvencySurplus = vytAvailableForYield - totalPromisedYield;
-  const overCollateralized = solvencySurplus >= 0n;
-  const solvencyRatioPct = totalPromisedYield > 0n
-    ? Number((vytAvailableForYield * 10000n) / totalPromisedYield) / 100
-    : null;
-  const solvencyMagnitudeVY = (Number(solvencySurplus < 0n ? -solvencySurplus : solvencySurplus) / 1e18)
-    .toLocaleString('en-US', { maximumFractionDigits: 2 });
-  const coverageSuffix = solvencyRatioPct != null ? ` (${solvencyRatioPct.toFixed(1)}% coverage)` : '';
-  const solvencyLabel = overCollateralized
-    ? `✅ Over-Collateralized — surplus ${solvencyMagnitudeVY} VY${coverageSuffix}`
-    : `🔴 Under-Collateralized — short ${solvencyMagnitudeVY} VY${coverageSuffix}`;
-
-  // Net VY Staked (from API: deposits - withdrawals)
-  const netVyStakedRaw = stakingStatsResponse?.data?.net_vy_staked;
-  const netVyStaked = netVyStakedRaw != null
-    ? new Amount(VY, BigInt(Math.round(parseFloat(netVyStakedRaw) * 1e18)))
-    : 'Unavailable' as const;
+  // REMOVED 2026-08-20 — the Staking Router section (router state, credits and
+  // indices, per-asset staking debt, VYT solvency, router token holdings, and the
+  // /staking/stats API call behind Net VY Staked). Removed on request: this
+  // reporting is moving onto the balance sheet.
+  //
+  // The VSR itself is still very much live and is read elsewhere — VBSO's
+  // `_pairUsdcUsd` values the protocol's VY/USDC LP as `uniPair.balanceOf(vsr)`,
+  // so the router's LP position still reaches the hard-assets figure above. Only
+  // this page's own staking panel is gone.
 
   // --- Buyback ---
-  const buybackAddress = (addresses as Record<string, Address>)['ValinityBuybackOfficer'];
+  const buybackAddress = (addresses as Record<string, Address>)['ValinityMarketStabilityOfficer'];
   const oldBuybackAddress = '0xD2F0826af20EbDc833c8418E312F23f373F8500e' as Address;
   const vytAddress = (addresses as Record<string, Address>)['ValinityYieldTreasury'];
   const erc20TransferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
@@ -731,117 +441,228 @@ const fetchData = async () => {
     0n
   );
   const totalVyBoughtBack = oldVyBoughtBack + newVyBoughtBack;
-  const collateralLTVFs = assets
-    .filter(a => a.isCollateral && a.LTVF.value > 0n)
-    .map(a => a.LTVF.value);
-  const lowestLTVF = collateralLTVFs.length > 0
-    ? collateralLTVFs.reduce((min, v) => v < min ? v : min)
-    : 0n;
-  const buybackBuyingPower = lowestLTVF > 0n
-    ? (buybackVyBalance * lowestLTVF) / BigInt(1e18)
-    : 0n;
 
-  // --- VRYO allocator aggregate (per-asset data lives on each asset card) ---
-  // VLM removed (V3 redesign, live impl 0xc8b848b9…0a241). VRYO no longer runs
-  // Uniswap V3 concentrated LP; it deploys each collateral asset VRT→DAX, driving
-  // its VY-cap share toward assetDeployRatioBps of the global cap. The per-asset
-  // reads are folded into the asset cards (see asset construction). capVRYO_total
-  // is deprecated (now 0), so the authoritative deployed total is Σ per-asset
-  // capVRYO — this feeds the cap-conservation invariant and Round Floor below.
-  const totalDeployedVY = assets
-    .filter(a => a.isCollateral)
-    .reduce((sum, a) => sum + (a.vryoCap.value as bigint), 0n);
+  // REMOVED 2026-08-20 — the whole VRT / VCO / VRYO reporting layer.
+  //
+  // Gone with it: the "Valinity Reserves" panel and its per-asset cards, Cap
+  // Health, VCO caps, VRYO caps, Round Floor, and the per-asset reserve balances.
+  // Every one of those was computed from VRT treasury balances or
+  // VCO.getAssetMetrics().ltvF, and on-chain both now read exactly zero for
+  // WETH/WBTC/PAXG (verified: totalReserve 0, ltvF 0) because all hard assets
+  // moved out of the VRT into the DAX. They had stopped being stale and started
+  // being FALSE — rendering $0.00 backing, and a red cap-mismatch alert nobody
+  // could act on, for a system holding real collateral.
+  //
+  // Backing per VY now comes from VBSO.sheet(); see `balanceSheet` below.
+  //
+  // STILL LOAD-BEARING, do not delete: the VRT's *VY* balance. It holds ~10.2M VY
+  // and circulating supply is totalSupply − VYT − VRT, which is the divisor for
+  // every per-VY floor on the balance sheet. Removing it would inflate the floors
+  // by roughly 20x.
 
-  const circulatingPctDeployed = totalUncollateralized > 0n
-    ? Number((totalDeployedVY * 10000n) / totalUncollateralized) / 100
-    : 0;
-
-  // --- Cap Health (totalCaps must equal circulating supply) ---
-  // Fees now flow directly to VBBO (not batched through the VY token to VCO),
-  // so accumulatedFees will always be zero and there is no lag. Total caps
-  // must equal the circulating supply at all times.
-  const capCirculatingLag = (totalCaps + totalDeployedVY) - totalUncollateralized;
-  const capLagMagnitude = capCirculatingLag < 0n ? -capCirculatingLag : capCirculatingLag;
-  // Treat sub-dust lag (integer-truncation rounding) as healthy; only a lag
-  // above CAP_HEALTH_DUST_WEI signals a real cap/circulating mismatch.
-  const capHealthy = capLagMagnitude <= CAP_HEALTH_DUST_WEI;
-  if (!capHealthy) {
-    overviewErrors.push(
-      `Cap-circulating mismatch: (totalCaps + totalDeployedVY) − circulating = ${(Number(capCirculatingLag) / 1e18).toFixed(2)} VY (expected 0)`
-    );
-  }
-
-  // --- Round Floor (mean per-asset global floor: USD backing per VY) ---
-  // Each collateral asset carries a "global floor" = (VRYO-deployed asset + VRT
-  // reserve) USD ÷ global cap (its `globalLTVF`). The Round Floor is the *average*
-  // of these across WETH/WBTC/PAXG — a blended view of backing per VY rather than
-  // the worst case, so a thin asset does not by itself define the round. Note this
-  // means a well-backed asset can lift the figure above the weakest leg's backing.
-  // Assets with no global cap, or a stale oracle (spotPrice 0 ⇒ backing can't be
-  // valued), are excluded from the average rather than averaged in as a false zero
-  // — with PAXG's thin pool the divisor is legitimately 2 some of the time.
-  let floorSum = 0n;
-  let floorCount = 0n;
-  for (const a of assets) {
-    if (!a.isCollateral) continue;
-    if ((a.globalCap.value as bigint) <= 0n) continue;
-    if ((a.spotPrice.value as bigint) <= 0n) continue;
-    floorSum += a.globalLTVF.value as bigint;
-    floorCount += 1n;
-  }
-  const roundFloor: Amount<bigint> | 'Unavailable' = floorCount > 0n
-    ? new Amount(USD, floorSum / floorCount)
-    : 'Unavailable';
-
-  // vrtCollateralUSD (VRT collateral USD) still feeds CLAV / liquid-assets below.
-  let vrtCollateralUSD = 0n;
-  for (const a of assets) {
-    if (!a.isCollateral) continue;
-    vrtCollateralUSD += a.reserveBalanceUSD.value as bigint;
-  }
-
-  // VRYO no longer holds standalone Uniswap V3 LP NFTs; its deployed assets live
-  // inside the DAX pool reserves, so they're already counted in daxTVL. Do NOT
-  // add the VRYO-deployed USD here or it would double-count against DAX TVL (it
-  // only feeds each asset's globalLTVF, which the Round Floor reads above).
   const daxTVL = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
   tvl += daxTVL;
 
-  // --- CLAV (Current Liquid Assets Value) ---
-  // Fiat value of the real, non-protocol collateral that actually backs the
-  // system — the live liquidity in WETH/WBTC/PAXG + USDC. We count only the
-  // asset side of each venue and EXCLUDE every VY and VGC, plus any synthetic
-  // asset (the DAX prices those in VY-equivalent terms, so they are VY value):
-  //   • VRT      → reserveBalanceUSD per collateral asset (already collateral-only)
-  //   • main DAX → asset side of each VY/collateral pool (synthetics filtered out)
-  //   • VDAODAX  → external-asset side of each pool (only known collateral is priced)
-  //   • Uni pool → the USDC side of VY/USDC (the VY side is excluded)
-  const collateralAddrs = new Set(
-    assets.filter(a => a.isCollateral).map(a => a.address.toLowerCase())
-  );
-  const daxCollateralUSD = daxPools.reduce((sum, p) =>
-    collateralAddrs.has(p.asset.toLowerCase()) ? sum + (p.reserveAssetUSD.value as bigint) : sum, 0n);
-  const vdaoDaxCollateralUSD = vdaoDaxPools.reduce((sum, p) =>
-    collateralAddrs.has(p.asset.toLowerCase()) ? sum + ((p.reserveAssetUSD?.value as bigint) ?? 0n) : sum, 0n);
-  const usdcPoolUSD = usdcReserve * 10n ** 12n; // 6→18 decimal, USDC ≈ $1
-  const liquidAssetsUSD = vrtCollateralUSD + daxCollateralUSD + vdaoDaxCollateralUSD + usdcPoolUSD;
+  // ─── VBSO — the company balance sheet ──────────────────────
+  // Authoritative backing source. All hard assets moved out of the VRT into the
+  // DAX, so every treasury-balance panel now reads ~0; sheet() is the truth.
+  const vbsoConfig = getContractConfig('ValinityBalanceSheetOfficer');
+  const vbsoErrors: string[] = [];
+  const vbsoResults = await client.multicall({
+    contracts: [
+      { ...vbsoConfig, functionName: 'sheet' },
+      { ...vbsoConfig, functionName: 'hardEquityUsd' },
+      { ...vbsoConfig, functionName: 'vyOracle' },
+      { ...vcoConfig, functionName: 'getTotalCirculatingVY' },
+      // Keep new calls APPENDED — the reads below index this array positionally.
+      { ...vbsoConfig, functionName: 'projectedVyPrice' },
+    ],
+    allowFailure: true,
+  });
+
+  const sheetRaw = vbsoResults[0].status === 'success'
+    ? vbsoResults[0].result as unknown as readonly bigint[]
+    : (() => { vbsoErrors.push(`sheet: ${(vbsoResults[0].error as Error)?.message ?? 'reverted'}`); return null; })();
+
+  const sheet = sheetRaw && {
+    hardAssetsUsd: sheetRaw[0], coveredLoansUsd: sheetRaw[1], loansFaceUsd: sheetRaw[2],
+    stakerDebtUsd: sheetRaw[3], equityUsd: sheetRaw[4], fuelUsd: sheetRaw[5],
+    demandUsd: sheetRaw[6], masterRateBps: sheetRaw[7], eraMaxBps: sheetRaw[8],
+    era: sheetRaw[9], mcapUsd: sheetRaw[10], usdPerVy: sheetRaw[11],
+    custodyCollateralUsd: sheetRaw[12], custodyEarnedUsd: sheetRaw[13],
+  };
+
+  // hardEquityUsd() is deployed; floorHardUsd()/floorFullUsd()/circulatingVY()
+  // are in the VBSO source but NOT in the live implementation (they revert), so
+  // the per-VY floors are derived here. Swap to the direct calls after an upgrade.
+  const hardEquityUsd = vbsoResults[1].status === 'success'
+    ? vbsoResults[1].result as bigint
+    : (sheet ? sheet.hardAssetsUsd - sheet.stakerDebtUsd : 0n);
+  const vyOracleAddress = vbsoResults[2].status === 'success'
+    ? vbsoResults[2].result as Address
+    : null;
+  // VCO is retired down to this single call; it matches totalSupply − VRT − VYT exactly.
+  const circulatingVY = vbsoResults[3].status === 'success'
+    ? vbsoResults[3].result as unknown as bigint
+    : totalUncollateralized;
+
+  // projectedVyPrice() reverts VmmoNotWired() before VMMO is set, so a failure is
+  // a legitimate state, not an outage — surface it as "unavailable" rather than a
+  // zero that would read as "no upside".
+  const projection = vbsoResults[4].status === 'success'
+    ? vbsoResults[4].result as unknown as {
+        vyPriceUsd: bigint; ammoUsd: bigint; deployWindowSec: bigint;
+        multipleX: bigint; livePriceUsd: bigint;
+      }
+    : null;
+  const projectionError = vbsoResults[4].status === 'success'
+    ? null
+    : ((vbsoResults[4].error as Error)?.message?.includes('VmmoNotWired')
+        ? 'VMMO not wired yet'
+        : 'projection unavailable');
+
+  const perVy = (usd: bigint) => (circulatingVY > 0n ? (usd * 10n ** 18n) / circulatingVY : 0n);
+  const floorHard = perVy(hardEquityUsd);
+  const marketPerVy = sheet?.usdPerVy ?? 0n;
+
+  const vyUsdWad = marketPerVy;
+  const vyToUsd = (vy: bigint) => (vy * vyUsdWad) / 10n ** 18n;
+
+  // --- VMMO inventory — market-maker stock held on the officer itself ─────────
+  // Un-deployed quoting inventory: it sits in the VMMO's own ERC20 balances, not
+  // inside any pool, so it double-counts none of the venue rows below. It is
+  // capital the desk can quote against on demand, so CLAV counts it at face.
+  const vmmoAddress = (addresses as Record<string, Address>)['ValinityMarketMakerOfficer'];
+  const vmmoRaw = await client.multicall({
+    contracts: [
+      ...assets.map(a => ({ ...getContractConfig('ERC20', a.address), functionName: 'balanceOf', args: [vmmoAddress] })),
+      { ...vyTokenConfig, functionName: 'balanceOf', args: [vmmoAddress] },
+    ],
+    allowFailure: true,
+  });
+
+  let vmmoInventoryUSD = 0n;
+  const vmmoHeld: string[] = [];
+  assets.forEach((a, i) => {
+    const r = vmmoRaw[i];
+    if (r.status !== 'success') {
+      overviewWarnings.push(`balanceOf(VMMO, ${a.symbol}): reverted`);
+      return;
+    }
+    const bal = r.result as bigint;
+    if (bal === 0n) return;
+    // USDC is not collateral, so it has no VAO TWAP — price it at $1. Collateral
+    // assets use the same spot price the reserve/loan rows are valued with.
+    const priceWad = a.symbol === 'USDC' ? 10n ** 18n : (a.spotPrice.value as bigint);
+    if (priceWad === 0n) {
+      // Stale/reverting TWAP (PAXG's thin pool does this) — count nothing rather
+      // than count it at zero silently.
+      overviewWarnings.push(`VMMO ${a.symbol}: no spot price, excluded from CLAV`);
+      return;
+    }
+    vmmoInventoryUSD += (bal * 10n ** BigInt(18 - a.currency.decimals) * priceWad) / 10n ** 18n;
+    vmmoHeld.push(a.symbol);
+  });
+  const vmmoVY = vmmoRaw[assets.length].status === 'success'
+    ? vmmoRaw[assets.length].result as bigint
+    : 0n;
+  if (vmmoVY > 0n) {
+    vmmoInventoryUSD += vyToUsd(vmmoVY);
+    vmmoHeld.push('VY');
+  }
+
+  // --- CLAV — Current Liquid Assets Value ---
+  // Total tradable depth of the system, counting BOTH sides of every venue — the
+  // way an aggregator (DEXScreener et al) reports pool liquidity. A constant-
+  // product pool holds equal value on each side, so counting only the asset side
+  // reports half the real depth. Venues:
+  //   • main DAX  → asset side + VY side of every pool
+  //   • Uni pool  → USDC side + VY side of VY/USDC
+  //   • VDAODAX   → priced side ×2 — its pair token (VGC) has no USD market, and
+  //                 constant-product parity imputes the unpriced leg
+  //   • VMMO      → idle market-maker inventory, counted once (it is not a pool)
+  // The VRT is deliberately NOT added: its hard assets moved into the DAX, so its
+  // balances are ~0 and adding them would double-count the DAX rows.
+  const daxAssetSideUSD = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
+  const daxVySideUSD = daxPools.reduce((sum, p) => sum + vyToUsd(p.reserveVY.value as bigint), 0n);
+  const uniUsdcSideUSD = usdcReserve * 10n ** 12n; // 6→18 decimal, USDC ≈ $1
+  const uniVySideUSD = vyToUsd(vyReserve);
+  const vdaoPricedSideUSD = vdaoDaxPools.reduce((sum, p) =>
+    sum + ((p.reserveAssetUSD?.value as bigint) ?? 0n), 0n);
+  const vdaoBothSidesUSD = vdaoPricedSideUSD * 2n;
+
+  const liquidAssetsUSD =
+    daxAssetSideUSD + daxVySideUSD + uniUsdcSideUSD + uniVySideUSD + vdaoBothSidesUSD
+    + vmmoInventoryUSD;
 
   return {
     circulatingSupply: new Amount(VY, totalUncollateralized),
     vyTotalSupply: new Amount(VY, vyTotalSupply),
     overview: {
-      'Total Caps': new Amount(VY, totalCaps + totalDeployedVY),
-      'VCO Caps': new Amount(VY, totalCaps),
-      'VRYO Caps': new Amount(VY, totalDeployedVY),
-      'Cap Health': capHealthy ? '✅ Total Caps = Circulating Supply' : `🔴 Off by ${(Number(capCirculatingLag) / 1e18).toFixed(6)} VY`,
       TVL: new Amount(USD, tvl),
-      'CLAV': new Amount(USD, liquidAssetsUSD),
-      MTP: mtp,
-      'Round Floor': roundFloor,
-      'VRYO Deployed': totalUncollateralized > 0n
-        ? `${circulatingPctDeployed.toFixed(2)}% of circulating`
-        : 'Unavailable' as const,
+      'CLAV (Current Liquid Assets Value)': new Amount(USD, liquidAssetsUSD),
     },
+    balanceSheet: sheet && {
+      floors: {
+        projected: projection ? Number(projection.vyPriceUsd) / 1e18 : null,
+        projectedAmmoUsd: projection ? Number(projection.ammoUsd) / 1e18 : 0,
+        projectedWindowSec: projection ? Number(projection.deployWindowSec) : 0,
+        projectedMultiple: projection ? Number(projection.multipleX) / 1e18 : 0,
+        projectedError: projectionError,
+        hard: Number(floorHard) / 1e18,
+        market: Number(marketPerVy) / 1e18,
+        circulating: Number(circulatingVY) / 1e18,
+        equityUsd: Number(sheet.equityUsd) / 1e18,
+        hardEquityUsd: Number(hardEquityUsd) / 1e18,
+        hardAssetsUsd: Number(sheet.hardAssetsUsd) / 1e18,
+        coveredLoansUsd: Number(sheet.coveredLoansUsd) / 1e18,
+        loansFaceUsd: Number(sheet.loansFaceUsd) / 1e18,
+        stakerDebtUsd: Number(sheet.stakerDebtUsd) / 1e18,
+        mcapUsd: Number(sheet.mcapUsd) / 1e18,
+      },
+      rows: {
+        'Hard assets': new Amount(USD, sheet.hardAssetsUsd),
+        'Covered loans': new Amount(USD, sheet.coveredLoansUsd),
+        'Loans at face': new Amount(USD, sheet.loansFaceUsd),
+        'Staker debt': new Amount(USD, sheet.stakerDebtUsd),
+        'Equity': new Amount(USD, sheet.equityUsd),
+        'Hard equity': new Amount(USD, hardEquityUsd),
+        'Fuel': new Amount(USD, sheet.fuelUsd),
+        'Demand': new Amount(USD, sheet.demandUsd),
+        'Custody collateral': new Amount(USD, sheet.custodyCollateralUsd),
+        'Custody earned': new Amount(USD, sheet.custodyEarnedUsd),
+        'Master rate': `${Number(sheet.masterRateBps) / 100}%`,
+        'Era': `${sheet.era} (max ${Number(sheet.eraMaxBps) / 100}%)`,
+      },
+      // mcapUsd is priced on TOTAL supply while the floors divide by CIRCULATING
+      // — a 32x different denominator. Never present them as comparable.
+      mcap: {
+        'Market cap (VBSO)': new Amount(USD, sheet.mcapUsd),
+        'Circulating VY': new Amount(VY, circulatingVY),
+        'Circulating market cap': new Amount(USD, vyToUsd(circulatingVY)),
+      },
+      vyOracle: vyOracleAddress,
+      // Exact wei for the stress-curve validation gate. Round-tripping these
+      // through the float `floors` above would fail the equality check every time.
+      raw: {
+        usdPerVy: marketPerVy,
+        equityUsd: sheet.equityUsd,
+        coveredLoansUsd: sheet.coveredLoansUsd,
+        circulatingVY,
+      },
+      errors: vbsoErrors,
+    },
+    // Rendered with a verbatim-label table, not renderValues — startCase would
+    // turn "VY/USDC — USDC side" into "VY USDC USDC Side".
+    clav: [
+      { venue: 'DAX', side: 'asset side', value: new Amount(USD, daxAssetSideUSD) },
+      { venue: 'DAX', side: 'VY side', value: new Amount(USD, daxVySideUSD) },
+      { venue: 'VY/USDC (Uniswap)', side: 'USDC side', value: new Amount(USD, uniUsdcSideUSD) },
+      { venue: 'VY/USDC (Uniswap)', side: 'VY side', value: new Amount(USD, uniVySideUSD) },
+      { venue: 'VDAODAX', side: 'both sides (VGC leg imputed)', value: new Amount(USD, vdaoBothSidesUSD) },
+      { venue: 'VMMO (market maker)', side: vmmoHeld.length ? `inventory — ${vmmoHeld.join(' + ')}` : 'inventory (empty)', value: new Amount(USD, vmmoInventoryUSD) },
+      { venue: 'CLAV total', side: '', value: new Amount(USD, liquidAssetsUSD), total: true },
+    ],
     overviewErrors,
     overviewWarnings,
     hasConfigWarnings,
@@ -881,38 +702,9 @@ const fetchData = async () => {
       pools: vdaoDaxPools,
       errors: vdaoDaxErrors,
     },
-    stakingRouter: {
-      debt: stakingDebtRows,
-      solvency: {
-        available: new Amount(VY, vytAvailableForYield),
-        balance: new Amount(VY, vytBalance),
-        promised: new Amount(VY, totalPromisedYield),
-        surplus: new Amount(VY, solvencySurplus < 0n ? -solvencySurplus : solvencySurplus),
-        overCollateralized,
-        ratioPct: solvencyRatioPct,
-        label: solvencyLabel,
-      },
-      overview: {
-        'VY in Pools': new Amount(VY, vyInPools),
-        'Total Staked VY': new Amount(VY, totalStakedVY),
-        'Total DAX Credits': new Amount({ symbol: '', decimals: 18 }, totalDaxCredits),
-        'Total UNI Credits': new Amount({ symbol: '', decimals: 18 }, totalUniCredits),
-        'DAX Index': new Amount({ symbol: '×', decimals: 18 }, daxIndex),
-        'UNI Index': new Amount({ symbol: '×', decimals: 18 }, uniIndex),
-        'Deposits Paused': vsrDepositsPaused,
-        'Withdrawals Paused': vsrWithdrawalsPaused,
-      },
-      tokenHoldings: {
-        'VDAX Balance': new Amount(VDAX, routerVDAX),
-        'UNI-LP Balance': new Amount(UNI_LP, routerUniLP),
-        'Net VY Staked': netVyStaked,
-      },
-      errors: vsrErrors,
-    },
     buyback: {
       'Total VY Bought Back': new Amount(VY, totalVyBoughtBack),
       'VY Holdings': new Amount(VY, buybackVyBalance),
-      'Buying Power': new Amount(USD, buybackBuyingPower),
     },
   };
 };
@@ -922,21 +714,43 @@ type MonitorData = Awaited<ReturnType<typeof fetchData>>;
 export default function Mainnet() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
     let active = true;
     const load = () => {
       fetchData()
         .then(d => { if (active) setData(d); })
-        .catch(e => { if (active) setError(e.message); });
+        .catch(e => { if (active) setError(e.message ?? String(e)); });
     };
     load();
     const interval = setInterval(load, 30_000);
     return () => { active = false; clearInterval(interval); };
   }, []);
 
+  // The first paint needs a few hundred RPC round trips and takes ~15s. A bare
+  // "Loading..." for that long is indistinguishable from a hung page, so show the
+  // clock — and after 40s say plainly that something is wrong, rather than
+  // spinning forever.
+  useEffect(() => {
+    if (data) return;
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [data]);
+
   if (error) return <p style={{ textAlign: 'center', color: 'red' }}>Error: {error}</p>;
-  if (!data) return <p style={{ textAlign: 'center' }}>Loading...</p>;
+  if (!data) return (
+    <p style={{ textAlign: 'center', opacity: 0.8 }}>
+      Loading on-chain data… {elapsed}s
+      {elapsed > 40 && (
+        <><br /><span style={{ color: '#e67e22' }}>
+          This is taking longer than it should (normal is ~15s). The RPC may be
+          throttling, or this tab may be pointed at a dev server that is no longer
+          running — reload it.
+        </span></>
+      )}
+    </p>
+  );
   return <Content data={data} />;
 }
 
@@ -958,6 +772,79 @@ function Content({ data }: { data: MonitorData }) {
               { label: 'VY in User Wallets', value: data.lps['VY in User Wallets'] },
             ]}
           />
+        </div>
+      </div>
+
+      {data.balanceSheet && (
+        <div>
+          <h2>
+            Balance Sheet — backing per VY{' '}
+            <a href={`https://etherscan.io/address/${VBSO_ADDRESS}`} target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>
+              VBSO ↗ Etherscan
+            </a>
+          </h2>
+          <div className={`box ${data.balanceSheet.errors.length > 0 ? 'box--error' : ''}`}>
+            {data.balanceSheet.errors.map((err, i) => (
+              <div key={i} className="error-item">✗ {err}</div>
+            ))}
+
+            <BackingTiles floors={data.balanceSheet.floors} />
+
+            <div className="vy-note">
+              These three are published together on purpose. <strong>Floor (hard)</strong> is
+              what the system holds in coin, net of staker debt — the number that does not
+              depend on the loan book. Equity in the sheet below is larger because it also
+              counts <strong>covered loans</strong>, currently{' '}
+              {(100 * data.balanceSheet.floors.coveredLoansUsd / Math.max(data.balanceSheet.floors.equityUsd, 1e-9)).toFixed(0)}%
+              of it, and those loans are <strong>collateralised in VY</strong> — an equity
+              figure that is partly a claim about VY priced in VY, which is why it is not
+              shown here as a headline price. Only{' '}
+              {(100 * data.balanceSheet.floors.coveredLoansUsd / Math.max(data.balanceSheet.floors.loansFaceUsd, 1e-9)).toFixed(1)}%
+              of the ${Math.round(data.balanceSheet.floors.loansFaceUsd).toLocaleString('en-US')} face
+              loan book passes the coverage gate at all.
+            </div>
+
+            <h3 style={{ marginTop: '1.25rem' }}>Sheet</h3>
+            {renderValues(data.balanceSheet.rows)}
+
+            <h3 style={{ marginTop: '1rem' }}>Market cap</h3>
+            {renderValues(data.balanceSheet.mcap)}
+            <div className="vy-note">
+              VBSO's <code>mcapUsd</code> prices <strong>total</strong> supply
+              ({Math.round(data.balanceSheet.floors.mcapUsd / Math.max(data.balanceSheet.floors.market, 1e-9)).toLocaleString('en-US')} VY),
+              while the floors divide by <strong>circulating</strong>
+              ({Math.round(data.balanceSheet.floors.circulating).toLocaleString('en-US')} VY).
+              Different denominators — do not compare them directly.
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div>
+        <h2>Liquidity — CLAV (Current Liquid Assets Value)</h2>
+        <div className="box">
+          <table>
+            <tbody>
+              {data.clav.map((row, i) => (
+                <tr key={i}>
+                  <td><strong>{row.venue}</strong></td>
+                  <td style={{ opacity: 0.7 }}>{row.side}</td>
+                  <td style={{ fontWeight: row.total ? 'bold' : undefined }}>
+                    <Value>{row.value}</Value>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="vy-note">
+            Both sides of every venue, the way an aggregator reports pool liquidity —
+            a constant-product pool holds equal value on each side, so counting only
+            the asset side reports half the real depth. VDAODAX's pair token (VGC)
+            has no USD market, so its unpriced leg is imputed at parity. The VMMO's
+            idle market-making inventory is counted once, at face — it sits in the
+            officer's own balances, not in a pool. The VRT is not counted: its hard
+            assets moved into the DAX and adding them would double-count.
+          </div>
         </div>
       </div>
 
@@ -983,7 +870,7 @@ function Content({ data }: { data: MonitorData }) {
       </div>
 
       <div>
-        <h2>Buyback <a href="https://etherscan.io/address/0x4B97D45d276084c1C5BDBd0aa29B417cE02bE2F6" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
+        <h2>Market Stability — VMSO <a href="https://etherscan.io/address/0x4B97D45d276084c1C5BDBd0aa29B417cE02bE2F6" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
         <div className="box">
           {renderValues(data.buyback)}
         </div>
@@ -1084,145 +971,6 @@ function Content({ data }: { data: MonitorData }) {
               </div>
             </>
           )}
-        </div>
-      </div>
-
-      <div>
-        <h2>Staking Router</h2>
-        <div className={`box ${data.stakingRouter.errors.length > 0 ? 'box--error' : ''}`}>
-          {data.stakingRouter.errors.length > 0 && (
-            <div className="error-list">
-              {data.stakingRouter.errors.map((err, i) => (
-                <div key={i} className="error-item">✗ {err}</div>
-              ))}
-            </div>
-          )}
-          <h3
-            title="The protocol's outstanding liability to stakers: original principal staked plus yield that has accrued but has not yet been claimed. Grouped so every stake of the same asset is summed together. Values are in each asset's native units."
-            style={{ marginTop: 0, cursor: 'help', borderBottom: '1px dotted #888', display: 'inline-block' }}
-          >System Debt (Principal + Accrued Yield Owed)</h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Asset</th>
-                <th>Principal Staked</th>
-                <th>Accrued Yield Owed</th>
-                <th>Total Debt</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.stakingRouter.debt.map(row => (
-                <tr key={row.symbol}>
-                  <td><strong>{row.symbol}</strong></td>
-                  <td><Value>{row.principal}</Value></td>
-                  <td><Value>{row.yieldOwed}</Value></td>
-                  <td><Value>{new Amount(row.principal.currency, row.principal.value + row.yieldOwed.value)}</Value></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <h3 style={{ marginTop: '12px' }}>Token Holdings</h3>
-          {renderValues(data.stakingRouter.tokenHoldings, undefined, {
-            'VDAX Balance': 'Actual VDAX token balance held by the router contract',
-            'UNI-LP Balance': 'Actual UNI-LP token balance held by the router contract',
-            'Net VY Staked': 'Cumulative VY deposited minus VY withdrawn through the staking router',
-          })}
-          <h3 style={{ marginTop: '12px' }}>Treasury Solvency</h3>
-          <table>
-            <tbody>
-              <tr>
-                <td>
-                  <strong title="VY held by the Yield Treasury (VYT) that is available to pay yield — its VY balance minus the 0.5% priority-officer cushion.">VYT Available for Yield</strong>
-                </td>
-                <td><Value>{data.stakingRouter.solvency.available}</Value></td>
-              </tr>
-              <tr>
-                <td>
-                  <strong title="Total reserved debt the treasury must stand behind: committed-but-unpaid yield plus the 2× principal-protection reservation, all in VY. This is a superset of the accrued yield shown per-asset above.">Total Promised Debt (reserved)</strong>
-                </td>
-                <td><Value>{data.stakingRouter.solvency.promised}</Value></td>
-              </tr>
-              <tr>
-                <td>
-                  <strong title="Over-collateralized when VYT Available for Yield ≥ Total Promised Debt — the protocol's own solvency invariant. The surplus is the VY buffer above all reserved debt.">Coverage</strong>
-                </td>
-                <td><Value>{data.stakingRouter.solvency.label}</Value></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div>
-        <h2>Valinity Reserves <a href="https://etherscan.io/address/0x06087789B7122fA92E7F9868B10A286Dd4e4C832" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>VRT ↗ Etherscan</a></h2>
-
-        <div style={{ marginTop: '8px' }}>
-          {data.assets.filter(a => a.isCollateral).map(asset => {
-            const { symbol, errors, warnings } = asset;
-            // Fixed field order: identity → VRYO target/actual → global → VRYO leg → VCO leg → VRT reserve.
-            const displayStats = {
-              'Address': asset.address,
-              'Spot Price': asset.spotPrice,
-              'Target Deploy Ratio': asset.targetDeployRatio,
-              'Deployed Ratio': asset.deployedRatio,
-              'Global Cap': asset.globalCap,
-              'Global LTV': asset.globalLTV,
-              'Global LTVF': asset.globalLTVF,
-              'VRYO Cap': asset.vryoCap,
-              'VRYO LTV': asset.vryoLTV,
-              'VRYO LTVF': asset.vryoLTVF,
-              'Deployed Balance': asset.deployedBalance,
-              'Deployed Balance USD': asset.deployedBalanceUSD,
-              'VCO Cap': asset.cap,
-              'VCO Cap Floor': asset.capFloor,
-              'VCO LTV': asset.LTV,
-              'VCO LTVF': asset.LTVF,
-              'Reserve Balance': asset.reserveBalance,
-              'Reserve Balance USD': asset.reserveBalanceUSD,
-              'Collateralized': asset.collateralized,
-            };
-            return (
-              <div key={symbol} className={`box ${errors && errors.length > 0 ? 'box--error' : warnings && warnings.length > 0 ? 'box--warning' : ''}`} style={{ marginTop: '8px' }}>
-                <h3>
-                  {symbol}
-                  {errors && errors.length > 0 && (
-                    <span className="error-badge">⚠ {errors.length} error{errors.length > 1 ? 's' : ''}</span>
-                  )}
-                  {warnings && warnings.length > 0 && !errors?.length && (
-                    <span className="warning-badge">⚠ {warnings.length} warning{warnings.length > 1 ? 's' : ''}</span>
-                  )}
-                </h3>
-                {errors && errors.length > 0 && (
-                  <div className="error-list">
-                    {errors.map((err, i) => (
-                      <div key={i} className="error-item">✗ {err}</div>
-                    ))}
-                  </div>
-                )}
-                {warnings && warnings.length > 0 && (
-                  <div className="warning-list">
-                    {warnings.map((warn, i) => (
-                      <div key={i} className="warning-item">⚠ {warn}</div>
-                    ))}
-                  </div>
-                )}
-                {renderValues(displayStats, undefined, {
-                  'Target Deploy Ratio': 'assetDeployRatioBps — VRYO’s target deployed share of this asset’s global cap.',
-                  'Deployed Ratio': 'Actual deployed share = capVRYO ÷ Global Cap.',
-                  'Global Cap': 'VRYO cap + VCO cap for this asset (getGlobalCap).',
-                  'Global LTV': '(VRYO-deployed asset + VRT reserve asset) ÷ Global Cap — asset per VY.',
-                  'Global LTVF': 'Global LTV × spot — USD backing per VY across both legs.',
-                  'VRYO LTV': 'getInternalLTV — deployed asset ÷ VRYO cap (asset per VY).',
-                  'VRYO LTVF': 'VRYO LTV × spot — USD per VY of the VRYO-deployed leg.',
-                  'Deployed Balance': 'deployedAsset — native amount VRYO has injected into the DAX pool.',
-                  'VCO Cap': 'CapOfficer collateralCap for this asset.',
-                  'VCO Cap Floor': 'VCO effective floor (global).',
-                  'VCO LTVF': 'CapOfficer ltvF — USD per VY of the VCO leg.',
-                  'Reserve Balance': 'Asset sitting in VRT (getAssetView.reserveBalance).',
-                })}
-              </div>
-            );
-          })}
         </div>
       </div>
 

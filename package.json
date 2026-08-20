@@ -11,6 +11,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "watch:oracle": "node oracle-watch.mjs",
+    "check:oracle": "node oracle-watch.mjs --once",
     "preview": "vite preview"
   },
   "dependencies": {

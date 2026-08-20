@@ -147,3 +147,80 @@ th {
     color: #b37400;
   }
 }
+
+/* ── VBSO balance sheet ─────────────────────────────────────
+   Tile accents are the validated categorical slots 1 (blue, projected) and
+   2 (orange, floor-hard), stepped per mode and checked against each mode's
+   actual surface: dark #3987e5/#d95926 on #181818, light #2a78d6/#eb6834 on
+   #eeeeee — all checks PASS. Both always carry a text label beside the swatch,
+   so identity is never colour-alone. */
+.monitor {
+  --vy-series-1: #3987e5;
+  --vy-series-2: #d95926;
+  --vy-ink-1: rgba(255, 255, 255, 0.92);
+  --vy-ink-2: rgba(255, 255, 255, 0.62);
+  --vy-ink-3: rgba(255, 255, 255, 0.38);
+  --vy-rule: rgba(255, 255, 255, 0.12);
+}
+
+@media (prefers-color-scheme: light) {
+  .monitor {
+    --vy-series-1: #2a78d6;
+    --vy-series-2: #eb6834;
+    --vy-ink-1: rgba(0, 0, 0, 0.88);
+    --vy-ink-2: rgba(0, 0, 0, 0.6);
+    --vy-ink-3: rgba(0, 0, 0, 0.42);
+    --vy-rule: rgba(0, 0, 0, 0.14);
+  }
+}
+
+.vy-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.vy-tile {
+  flex: 1 1 10rem;
+  min-width: 9rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--vy-rule);
+  border-radius: 0.4rem;
+}
+
+.vy-tile__label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--vy-ink-2);
+}
+
+.vy-tile__value {
+  font-size: 1.9rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  margin: 0.35rem 0 0.2rem;
+}
+
+.vy-tile__hint { font-size: 0.68rem; color: var(--vy-ink-3); }
+.vy-tile__caveat { font-size: 0.68rem; color: var(--vy-ink-2); margin-top: 0.2rem; }
+
+.vy-swatch {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 0.12rem;
+  display: inline-block;
+}
+
+.vy-note {
+  font-size: 0.72rem;
+  color: var(--vy-ink-2);
+  line-height: 1.5;
+  margin-top: 0.6rem;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--vy-rule);
+}
