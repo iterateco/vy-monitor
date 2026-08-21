@@ -5,11 +5,13 @@ import { useEffect, useState, type JSX } from 'react';
 import { createPublicClient, http, parseAbiItem, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
-import { BackingTiles, HoldingsTable, EraLadder } from '../components/BalanceSheet';
+import { BackingTiles, HoldingsTable, EraLadder, TradingVolume } from '../components/BalanceSheet';
+import type { VolumeData } from '../components/BalanceSheet';
 import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
 import { Amount, USD, VY } from '../models';
 import type { Currency } from '../models';
 import networks from '../networks';
+import { indexTxFlow, bucketFlow, type FlowProgress } from '../utils/txFlow';
 
 
 /**
@@ -602,28 +604,35 @@ const fetchData = async () => {
       : n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 6 : 4 });
   };
 
+  // Debt is shown against the asset that actually backs it: the USDC book's
+  // invested slice moves off the USDC row and onto WETH/WBTC/PAXG. Totals are
+  // unchanged by the move; what it buys is that every row now reconciles
+  // holdings − debt = equity, instead of only the totals doing so.
   const assetTable = {
     rows: raw.map((r) => {
       const share = hardHeldUsd > 0 && r.sym !== 'USDC' ? r.heldUsd / hardHeldUsd : 0;
-      const investedUsd = r.sym === 'USDC' ? 0 : investedTotal * share;
-      const investedNative = r.sym === 'USDC' || r.px === 0n
-        ? null
-        : (investedUsd / (Number(r.px) / 1e18)).toLocaleString('en-US', { maximumFractionDigits: 6 });
+      const debtUsd = r.sym === 'USDC'
+        ? Math.max(0, r.debtUsd - investedTotal)   // the part still sitting in USDC
+        : r.debtUsd + investedTotal * share;       // own debt + the USDC slice it holds
+      const pxUsd = Number(r.px) / 1e18;
       return {
         symbol: r.sym,
         heldNative: fmtNative(r.held, r.decimals),
         heldUsd: r.heldUsd,
-        debtNative: fmtNative(r.debt, r.decimals),
-        debtUsd: r.debtUsd,
-        investedNative,
-        investedUsd,
-        equityUsd: Math.max(0, r.heldUsd - r.debtUsd - investedUsd),
+        // Native equivalent of the merged figure — the amount of THIS asset it
+        // would take to settle it. The raw staker-debt balance is no longer the
+        // whole story once the USDC slice lands here.
+        debtNative: pxUsd > 0
+          ? (debtUsd / pxUsd).toLocaleString('en-US', { maximumFractionDigits: debtUsd / pxUsd < 1 ? 6 : 4 })
+          : '—',
+        debtUsd,
+        equityUsd: Math.max(0, r.heldUsd - debtUsd),
       };
     }),
     totals: (() => {
       const held = raw.reduce((n, r) => n + r.heldUsd, 0);
       const debt = raw.reduce((n, r) => n + r.debtUsd, 0);
-      return { held, debt, invested: investedTotal, equity: held - debt, ratio: debt > 0 ? held / debt : 0 };
+      return { held, debt, equity: held - debt, ratio: debt > 0 ? held / debt : 0 };
     })(),
   };
 
@@ -740,6 +749,9 @@ const fetchData = async () => {
         'Demand': new Amount(USD, sheet.demandUsd),
       },
       assetTable,
+      // Marks for the volume panel, so it values flow with the same oracle the
+      // sheet uses rather than fetching its own.
+      assetPrices: Object.fromEntries(raw.map((r) => [r.sym, r.px])) as Record<string, bigint>,
       era: Number(sheet.era),
       anchorBps: vbsoResults[5].status === 'success'
         ? Number(vbsoResults[5].result as unknown as number)
@@ -821,12 +833,55 @@ const fetchData = async () => {
   };
 };
 
+
+/**
+ * Trading volume — the token-tracker measure. See src/utils/txFlow.ts for what it
+ * counts and why the number is much larger than pool flow.
+ */
+async function fetchVolume(
+  priceOf: Record<string, bigint>,
+  onProgress?: (p: FlowProgress) => void,
+): Promise<VolumeData | null> {
+  const vyToken = (networks.mainnet.addresses as Record<string, Address>)['ValinityToken'];
+  const head = await client.getBlock();
+  const now = Number(head.timestamp);
+
+  // Resolve window boundaries against real block timestamps rather than assuming
+  // 12s spacing: estimate, read that block, correct once.
+  const blockAgo = async (seconds: number) => {
+    let guess = head.number - BigInt(Math.floor(seconds / 12));
+    if (guess < 0n) return 0n;
+    for (let i = 0; i < 2; i++) {
+      const b = await client.getBlock({ blockNumber: guess });
+      const drift = Number(b.timestamp) - (now - seconds);
+      if (Math.abs(drift) < 120) break;
+      guess -= BigInt(Math.round(drift / 12));
+      if (guess < 0n) return 0n;
+    }
+    return guess;
+  };
+  const [b24, b30] = await Promise.all([blockAgo(86_400), blockAgo(30 * 86_400)]);
+
+  const rows = await indexTxFlow(client, vyToken, head.number, onProgress);
+  const f = bucketFlow(rows, { day: Number(b24), month: Number(b30) }, priceOf);
+  return {
+    rows: f.rows.map((r) => ({
+      symbol: r.symbol, day: r.day, month: r.month, all: r.all,
+      dayCount: 0, monthCount: 0, allCount: 0,
+    })),
+    totals: f.totals,
+    txCount: f.txCount,
+  };
+}
+
 type MonitorData = Awaited<ReturnType<typeof fetchData>>;
 
 export default function Mainnet() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [volume, setVolume] = useState<VolumeData | null>(null);
+  const [volProgress, setVolProgress] = useState<FlowProgress | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -839,6 +894,24 @@ export default function Mainnet() {
     const interval = setInterval(load, 30_000);
     return () => { active = false; clearInterval(interval); };
   }, []);
+
+  // Volume is 8 full-history getLogs scans, so it runs on its own slow cadence
+  // rather than on every 30s refresh. Failure is non-fatal: the panel shows a
+  // placeholder and the rest of the page is unaffected.
+  const volPrices = data?.balanceSheet?.assetPrices;
+  useEffect(() => {
+    if (!volPrices) return;
+    let active = true;
+    const load = () => {
+      fetchVolume(volPrices, (p) => { if (active) setVolProgress(p); })
+        .then((v) => { if (active) { setVolume(v); setVolProgress(null); } })
+        .catch(() => { if (active) setVolProgress(null); });
+    };
+    load();
+    const t = setInterval(load, 300_000);
+    return () => { active = false; clearInterval(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!volPrices]);
 
   // The first paint needs a few hundred RPC round trips and takes ~15s. A bare
   // "Loading..." for that long is indistinguishable from a hung page, so show the
@@ -863,27 +936,32 @@ export default function Mainnet() {
       )}
     </p>
   );
-  return <Content data={data} />;
+  return <Content data={data} volume={volume} volProgress={volProgress} />;
 }
 
-function Content({ data }: { data: MonitorData }) {
+function Content({ data, volume, volProgress }: { data: MonitorData; volume: VolumeData | null; volProgress: FlowProgress | null }) {
 
   return (
     <div className="monitor">
       <div>
         <h2>Balances <a href="https://etherscan.io/address/0xe58E29c947013B4CBCdb67f90d659c3894BE2974" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>VYT ↗ Etherscan</a></h2>
-        <div className="box">
-          <BalanceTable
-            data={data.balanceMap}
-            headerRows={[
-              { label: 'VY Total Supply', value: data.vyTotalSupply },
-            ]}
-            footerRows={[
-              { label: 'VY in LPs', value: data.lps['Total VY in LPs'] },
-              { label: 'Circulating Supply', value: data.circulatingSupply },
-              { label: 'VY in User Wallets', value: data.lps['VY in User Wallets'] },
-            ]}
-          />
+        <div className="box vy-split">
+          <div className="vy-split__left">
+            <BalanceTable
+              data={data.balanceMap}
+              headerRows={[
+                { label: 'VY Total Supply', value: data.vyTotalSupply },
+              ]}
+              footerRows={[
+                { label: 'VY in LPs', value: data.lps['Total VY in LPs'] },
+                { label: 'Circulating Supply', value: data.circulatingSupply },
+                { label: 'VY in User Wallets', value: data.lps['VY in User Wallets'] },
+              ]}
+            />
+          </div>
+          <div className="vy-split__right">
+            <TradingVolume volume={volume} progress={volProgress} />
+          </div>
         </div>
       </div>
 
@@ -939,15 +1017,6 @@ function Content({ data }: { data: MonitorData }) {
               ))}
             </tbody>
           </table>
-          <div className="vy-note">
-            Both sides of every venue, the way an aggregator reports pool liquidity —
-            a constant-product pool holds equal value on each side, so counting only
-            the asset side reports half the real depth. VDAODAX's pair token (VGC)
-            has no USD market, so its unpriced leg is imputed at parity. The VMMO's
-            idle market-making inventory is counted once, at face — it sits in the
-            officer's own balances, not in a pool. The VRT is not counted: its hard
-            assets moved into the DAX and adding them would double-count.
-          </div>
         </div>
       </div>
 

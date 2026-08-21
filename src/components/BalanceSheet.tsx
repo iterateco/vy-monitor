@@ -121,14 +121,13 @@ export function BackingTiles({ floors }: { floors: Floors }) {
  *
  *   HOLDINGS  VMMO.heldOf(asset) — system holdings, all five sources
  *   DEBT      aggReservedAsset + aggWithdrawingAsset — principal + unclaimed yield
- *   INVESTED  USDC debt − USDC held: the part of the USDC book that is not sitting
- *             in USDC, i.e. what was put into WETH/WBTC/PAXG. Exact as a total;
- *             the per-asset split is PRO-RATA on holdings, because nothing on
- *             chain tags which WBTC was bought with which USDC.
- *   EQUITY    holdings − debt − invested, per asset
+ *             Debt is shown against the asset that BACKS it: the USDC book's
+ *             invested slice (USDC debt − USDC held, split pro-rata on holdings
+ *             because nothing on chain tags which WBTC came from which USDC)
+ *             moves onto WETH/WBTC/PAXG.
+ *   EQUITY    holdings − debt, per asset
  *
- * The identity closes both ways: debt + equity == holdings, and
- * (hard holdings − invested − hard debt) == (total holdings − total debt).
+ * Every row reconciles: holdings − debt = equity, and the totals do too.
  */
 export type AssetRow = {
   symbol: string;
@@ -136,14 +135,12 @@ export type AssetRow = {
   heldUsd: number;
   debtNative: string;
   debtUsd: number;
-  investedNative: string | null;
-  investedUsd: number;
   equityUsd: number;
 };
 
 export type AssetTable = {
   rows: AssetRow[];
-  totals: { held: number; debt: number; invested: number; equity: number; ratio: number };
+  totals: { held: number; debt: number; equity: number; ratio: number };
 };
 
 const money = (n: number) =>
@@ -173,39 +170,23 @@ function Cell({ sym, native, usd, muted }: { sym: string; native: string | null;
 
 export function HoldingsTable({ table }: { table: AssetTable }) {
   const { rows, totals } = table;
-  const hard = rows.filter((r) => r.symbol !== 'USDC');
   const over = totals.held >= totals.debt;
 
   return (
     <div className="vy-sheet">
       <div className="vy-cols">
-        <Col title="Holdings" sub="" accent="var(--vy-series-1)">
+        <Col title="Holdings" sub="total ecosystem holdings" accent="var(--vy-series-1)">
           {rows.map((r) => <Cell key={r.symbol} sym={r.symbol} native={r.heldNative} usd={r.heldUsd} />)}
           <div className="vy-col__total">{money(totals.held)}</div>
         </Col>
 
-        <Col title="Debt" sub="principal + unclaimed yield" accent="var(--vy-series-2)">
+        <Col title="Debt" sub="principal + unclaimed yield, on the asset backing it" accent="var(--vy-series-2)">
           {rows.map((r) => <Cell key={r.symbol} sym={r.symbol} native={r.debtNative} usd={r.debtUsd} />)}
           <div className="vy-col__total">{money(totals.debt)}</div>
         </Col>
 
-        <Col title="USDC debt invested" sub="the USDC book held as hard assets">
-          <div className="vy-cell vy-cell--muted">
-            <div className="vy-cell__sym">USDC</div>
-            <div className="vy-cell__native">held as USDC</div>
-            <div className="vy-cell__usd">—</div>
-          </div>
-          {hard.map((r) => <Cell key={r.symbol} sym={r.symbol} native={r.investedNative} usd={r.investedUsd} />)}
-          <div className="vy-col__total">{money(totals.invested)}</div>
-        </Col>
-
         <Col title="Equity" sub="held, beyond every debt">
-          <div className="vy-cell vy-cell--muted">
-            <div className="vy-cell__sym">USDC</div>
-            <div className="vy-cell__native">fully owed</div>
-            <div className="vy-cell__usd">{money(0)}</div>
-          </div>
-          {hard.map((r) => (
+          {rows.map((r) => (
             <div className="vy-cell" key={r.symbol}>
               <div className="vy-cell__sym">{r.symbol}</div>
               <div className="vy-cell__native">&nbsp;</div>
@@ -298,6 +279,80 @@ export function EraLadder({
             — multiplier table is stale.
           </strong>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Trading volume
+// ─────────────────────────────────────────────────────────────
+export type VolumeRow = {
+  symbol: string;
+  day: number; month: number; all: number;
+  dayCount: number; monthCount: number; allCount: number;
+};
+
+export type VolumeData = {
+  rows: VolumeRow[];
+  totals: { day: number; month: number; all: number };
+  txCount: { day: number; month: number; all: number };
+};
+
+/**
+ * Asset flow through each venue, in USD. Historical flow is valued at TODAY's
+ * marks — per-trade historical pricing is not available from a transfer log, so
+ * the all-time column is "what that flow is worth now", not what it was worth
+ * when it happened. The 24h column is unaffected in practice.
+ */
+export function TradingVolume({
+  volume, progress,
+}: { volume: VolumeData | null; progress: { done: number; total: number } | null }) {
+  if (!volume) {
+    return (
+      <div className="vy-vol">
+        <div className="vy-vol__title">Trading volume</div>
+        <div className="vy-vol__loading">
+          {progress && progress.total > 0
+            ? `indexing VY transactions… ${progress.done.toLocaleString('en-US')} / ${progress.total.toLocaleString('en-US')}`
+            : 'reading transfer logs…'}
+        </div>
+      </div>
+    );
+  }
+  const { rows, totals } = volume;
+  return (
+    <div className="vy-vol">
+      <div className="vy-vol__title">Trading volume</div>
+      <table className="vy-vol__table">
+        <thead>
+          <tr>
+            <th />
+            <th>24h</th>
+            <th>30d</th>
+            <th>All time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.symbol}>
+              <td className="vy-vol__sym">{r.symbol}</td>
+              <td>{money(r.day)}</td>
+              <td>{money(r.month)}</td>
+              <td>{money(r.all)}</td>
+            </tr>
+          ))}
+          <tr className="vy-vol__total">
+            <td>Total</td>
+            <td>{money(totals.day)}</td>
+            <td>{money(totals.month)}</td>
+            <td>{money(totals.all)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="vy-vol__note">
+        every USDC/WBTC/WETH/PAXG leg inside a VY transaction ({volume.txCount.all.toLocaleString('en-US')} txs
+        indexed), valued at today's marks.
       </div>
     </div>
   );
