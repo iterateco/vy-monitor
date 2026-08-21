@@ -224,3 +224,148 @@ th {
   padding-left: 0.6rem;
   border-left: 2px solid var(--vy-rule);
 }
+
+/* ── Holdings / Debt / Invested / Equity ─────────────────── */
+.vy-sheet { margin-bottom: 1rem; }
+
+.vy-cols {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+@media (max-width: 40rem) {
+  .vy-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.vy-col {
+  border: 1px solid var(--vy-rule);
+  border-radius: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  min-width: 0;
+}
+
+.vy-col__head {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--vy-ink-1);
+  /* Two-line titles ("USDC DEBT INVESTED") must not push their column's rows out
+     of line with the other three — reserve the taller box for every column. */
+  min-height: 2.3rem;
+}
+
+.vy-col__sub {
+  font-size: 0.63rem;
+  color: var(--vy-ink-3);
+  margin-bottom: 0.5rem;
+  min-height: 1.7rem;
+}
+
+.vy-cell {
+  padding: 0.32rem 0;
+  border-top: 1px solid var(--vy-rule);
+}
+
+.vy-cell--muted { opacity: 0.5; }
+.vy-cell__sym { font-size: 0.66rem; color: var(--vy-ink-2); letter-spacing: 0.03em; }
+
+.vy-cell__native {
+  font-size: 0.72rem;
+  color: var(--vy-ink-2);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vy-cell__usd {
+  font-size: 0.92rem;
+  color: var(--vy-ink-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.vy-col__total {
+  margin-top: 0.45rem;
+  padding-top: 0.4rem;
+  border-top: 2px solid var(--vy-rule);
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--vy-ink-1);
+}
+
+.vy-verdict {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.7rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(27, 175, 122, 0.35);
+  background: rgba(27, 175, 122, 0.09);
+  font-size: 0.78rem;
+  color: var(--vy-ink-1);
+}
+
+.vy-verdict--bad {
+  border-color: rgba(227, 73, 72, 0.45);
+  background: rgba(227, 73, 72, 0.1);
+}
+
+.vy-verdict__mark {
+  font-size: 1.05rem;
+  color: #1baf7a;
+  font-weight: 700;
+}
+
+.vy-verdict--bad .vy-verdict__mark { color: #e34948; }
+
+/* ── Era ladder ──────────────────────────────────────────── */
+.vy-ladder {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.vy-rung {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--vy-rule);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: var(--vy-ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.vy-rung--done { color: var(--vy-ink-2); }
+
+.vy-rung--now {
+  color: var(--vy-ink-1);
+  border-color: rgba(27, 175, 122, 0.5);
+  background: rgba(27, 175, 122, 0.1);
+  font-weight: 700;
+}
+
+.vy-rung__mark { color: #1baf7a; font-weight: 700; }
+.vy-ladder__note { font-size: 0.68rem; color: var(--vy-ink-3); margin-left: 0.25rem; }
+
+.vy-ladder-wrap { margin-top: 0.2rem; }
+
+.vy-rung {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.05rem;
+  border-radius: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  min-width: 5.4rem;
+}
+
+.vy-rung__top { display: flex; align-items: center; gap: 0.25rem; font-weight: 700; }
+.vy-rung__rate { font-size: 0.86rem; color: var(--vy-ink-1); font-variant-numeric: tabular-nums; }
+.vy-rung--now .vy-rung__rate { color: #1baf7a; }
+.vy-rung__rel { font-size: 0.6rem; color: var(--vy-ink-3); }
+.vy-ladder__note { margin-left: 0; margin-top: 0.4rem; line-height: 1.5; }

@@ -1,5 +1,30 @@
 export default [
   {
+    // Haircut applied to the VY mark when quoting a loan — 50% today.
+    "inputs": [],
+    "name": "marketLtvBps",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    // Per-CALL ceiling in bps of circulating VY on every VY amount that moves.
+    // NOTE: per call, NOT per position — openLoan at the cap plus N increaseLoan
+    // calls at the cap is one position of (N+1)x in a single transaction.
+    "inputs": [],
+    "name": "loanCapBps",
+    "outputs": [{ "internalType": "uint16", "name": "", "type": "uint16" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getTotalCirculatingVY",
+    "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "stateMutability": "nonpayable",
     "type": "constructor"

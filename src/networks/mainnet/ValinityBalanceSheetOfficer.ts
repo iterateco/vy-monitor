@@ -86,6 +86,24 @@ export default [
     ],
   },
   {
+    // The premium anchor the era ladder scales, read live rather than hardcoded:
+    // if governance ever moves it, every rung's rate follows.
+    type: 'function',
+    name: 'PREMIUM_ANCHOR_BPS',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint16' }],
+  },
+  {
+    // USD per whole token, 1e18 — the same marks the sheet values everything at,
+    // so the holdings table cannot drift from the sheet by using another oracle.
+    type: 'function',
+    name: 'assetUsdPrice',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
     type: 'function',
     name: 'vyOracle',
     stateMutability: 'view',

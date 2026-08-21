@@ -5,6 +5,7 @@ import ValinityAcquisitionOfficer from './ValinityAcquisitionOfficer';
 import ValinityBalanceSheetOfficer from './ValinityBalanceSheetOfficer';
 import ValinityCapOfficer from './ValinityCapOfficer';
 import ValinityLoanOfficer from './ValinityLoanOfficer';
+import ValinityMarketMakerOfficer from './ValinityMarketMakerOfficer';
 import ValinityReserveYieldOfficer from './ValinityReserveYieldOfficer';
 
 export default {
@@ -14,6 +15,7 @@ export default {
     ValinityBalanceSheetOfficer,
     ValinityCapOfficer,
     ValinityLoanOfficer,
+    ValinityMarketMakerOfficer,
     ValinityReserveYieldOfficer
   },
   addresses,

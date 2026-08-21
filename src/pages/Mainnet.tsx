@@ -5,7 +5,7 @@ import { useEffect, useState, type JSX } from 'react';
 import { createPublicClient, http, parseAbiItem, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
-import { BackingTiles } from '../components/BalanceSheet';
+import { BackingTiles, HoldingsTable, EraLadder } from '../components/BalanceSheet';
 import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
 import { Amount, USD, VY } from '../models';
 import type { Currency } from '../models';
@@ -476,6 +476,7 @@ const fetchData = async () => {
       { ...vcoConfig, functionName: 'getTotalCirculatingVY' },
       // Keep new calls APPENDED — the reads below index this array positionally.
       { ...vbsoConfig, functionName: 'projectedVyPrice' },
+      { ...vbsoConfig, functionName: 'PREMIUM_ANCHOR_BPS' },
     ],
     allowFailure: true,
   });
@@ -520,6 +521,111 @@ const fetchData = async () => {
     : ((vbsoResults[4].error as Error)?.message?.includes('VmmoNotWired')
         ? 'VMMO not wired yet'
         : 'projection unavailable');
+
+  // ─── Loan terms (VLO) ──────────────────────────────────────
+  // getLTV(asset) is asset-units-per-VY already haircut by marketLtvBps and
+  // already min-ed against the DAX pool leg, so pricing it gives the USD a
+  // borrower actually draws per VY. Taken as the MINIMUM across supported assets:
+  // that is the figure that holds whichever asset you borrow.
+  const loanAssets = assets.filter((a) => a.isCollateral);
+  const loanRaw = await client.multicall({
+    contracts: [
+      { ...vloConfig, functionName: 'marketLtvBps', args: [] },
+      { ...vloConfig, functionName: 'loanCapBps', args: [] },
+      ...loanAssets.map((a) => ({ ...vloConfig, functionName: 'getLTV', args: [a.address] })),
+    ],
+    allowFailure: true,
+  });
+  const ltvBps = loanRaw[0].status === 'success' ? Number(loanRaw[0].result as unknown as number) : 0;
+  const loanCapBps = loanRaw[1].status === 'success' ? Number(loanRaw[1].result as unknown as number) : 0;
+  const perVyUsdQuotes = loanAssets
+    .map((a, i) => {
+      const r = loanRaw[2 + i];
+      if (r.status !== 'success') return null;
+      const ltv = r.result as unknown as bigint;          // asset units per VY, WAD
+      const px = a.spotPrice.value as bigint;             // USD per whole asset, WAD
+      return px > 0n ? Number((ltv * px) / 10n ** 18n) / 1e18 : null;
+    })
+    .filter((v): v is number => v !== null && v > 0);
+  const borrowUsdPerVy = perVyUsdQuotes.length ? Math.min(...perVyUsdQuotes) : 0;
+  const maxLoanVy = Number((circulatingVY * BigInt(loanCapBps)) / 10_000n) / 1e18;
+
+  // ─── Holdings / Debt / Invested / Equity, per asset ────────
+  // Every input from VMMO: heldOf() is the system's own holdings roll-up (the same
+  // five sources VBSO walks), and reserved+withdrawing is principal plus unclaimed
+  // yield. Marks come from VBSO.assetUsdPrice so this table cannot drift from the
+  // sheet by using a different oracle.
+  const TABLE_ASSETS: string[] = ['USDC', 'WBTC', 'WETH', 'PAXG'];
+  const vmmoConfig = getContractConfig('ValinityMarketMakerOfficer');
+  const tableAssets = TABLE_ASSETS
+    .map((sym) => {
+      const entry = assetEntries.find(([k]) => k === sym);
+      const a = assets.find((x) => x.symbol === sym);
+      return entry && a ? { sym, address: entry[1], decimals: a.currency.decimals ?? 18 } : null;
+    })
+    .filter((x) => x !== null) as { sym: string; address: Address; decimals: number }[];
+
+  const tableRaw = await client.multicall({
+    contracts: tableAssets.flatMap((t) => [
+      { ...vmmoConfig, functionName: 'heldOf', args: [t.address] },
+      { ...vmmoConfig, functionName: 'aggReservedAsset', args: [t.address] },
+      { ...vmmoConfig, functionName: 'aggWithdrawingAsset', args: [t.address] },
+      { ...vbsoConfig, functionName: 'assetUsdPrice', args: [t.address] },
+    ]),
+    allowFailure: true,
+  });
+
+  const num = (v: bigint, d: number) => Number(v) / 10 ** d;
+  const raw = tableAssets.map((t, i) => {
+    const g = (k: number) => {
+      const r = tableRaw[i * 4 + k];
+      return r.status === 'success' ? r.result as unknown as bigint : 0n;
+    };
+    const held = g(0);
+    const debt = g(1) + g(2);
+    const px = g(3);
+    const toUsd = (v: bigint) => Number((v * px) / 10n ** BigInt(t.decimals)) / 1e18;
+    return { ...t, held, debt, heldUsd: toUsd(held), debtUsd: toUsd(debt), px };
+  });
+
+  const usdcRow = raw.find((r) => r.sym === 'USDC');
+  const hardRows = raw.filter((r) => r.sym !== 'USDC');
+  const hardHeldUsd = hardRows.reduce((n, r) => n + r.heldUsd, 0);
+  // Exact as a total: the slice of the USDC book not sitting in USDC. The per-asset
+  // split is pro-rata on holdings — nothing on chain tags which WBTC came from which
+  // USDC, so this is a presentation split and is labelled as one.
+  const investedTotal = usdcRow ? Math.max(0, usdcRow.debtUsd - usdcRow.heldUsd) : 0;
+
+  const fmtNative = (v: bigint, d: number) => {
+    const n = num(v, d);
+    return n === 0 ? '0' : n < 0.0001 ? n.toExponential(2)
+      : n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 6 : 4 });
+  };
+
+  const assetTable = {
+    rows: raw.map((r) => {
+      const share = hardHeldUsd > 0 && r.sym !== 'USDC' ? r.heldUsd / hardHeldUsd : 0;
+      const investedUsd = r.sym === 'USDC' ? 0 : investedTotal * share;
+      const investedNative = r.sym === 'USDC' || r.px === 0n
+        ? null
+        : (investedUsd / (Number(r.px) / 1e18)).toLocaleString('en-US', { maximumFractionDigits: 6 });
+      return {
+        symbol: r.sym,
+        heldNative: fmtNative(r.held, r.decimals),
+        heldUsd: r.heldUsd,
+        debtNative: fmtNative(r.debt, r.decimals),
+        debtUsd: r.debtUsd,
+        investedNative,
+        investedUsd,
+        equityUsd: Math.max(0, r.heldUsd - r.debtUsd - investedUsd),
+      };
+    }),
+    totals: (() => {
+      const held = raw.reduce((n, r) => n + r.heldUsd, 0);
+      const debt = raw.reduce((n, r) => n + r.debtUsd, 0);
+      return { held, debt, invested: investedTotal, equity: held - debt, ratio: debt > 0 ? held / debt : 0 };
+    })(),
+  };
 
   const perVy = (usd: bigint) => (circulatingVY > 0n ? (usd * 10n ** 18n) / circulatingVY : 0n);
   const floorHard = perVy(hardEquityUsd);
@@ -610,6 +716,9 @@ const fetchData = async () => {
         projectedMultiple: projection ? Number(projection.multipleX) / 1e18 : 0,
         projectedError: projectionError,
         hard: Number(floorHard) / 1e18,
+        borrowUsdPerVy,
+        ltvBps,
+        maxLoanVy,
         market: Number(marketPerVy) / 1e18,
         circulating: Number(circulatingVY) / 1e18,
         equityUsd: Number(sheet.equityUsd) / 1e18,
@@ -629,17 +738,20 @@ const fetchData = async () => {
         'Hard equity': new Amount(USD, hardEquityUsd),
         'Fuel': new Amount(USD, sheet.fuelUsd),
         'Demand': new Amount(USD, sheet.demandUsd),
-        'Custody collateral': new Amount(USD, sheet.custodyCollateralUsd),
-        'Custody earned': new Amount(USD, sheet.custodyEarnedUsd),
-        'Master rate': `${Number(sheet.masterRateBps) / 100}%`,
-        'Era': `${sheet.era} (max ${Number(sheet.eraMaxBps) / 100}%)`,
       },
+      assetTable,
+      era: Number(sheet.era),
+      anchorBps: vbsoResults[5].status === 'success'
+        ? Number(vbsoResults[5].result as unknown as number)
+        : Number(sheet.eraMaxBps),
+      // Live ceiling for the CURRENT era — the ladder cross-checks its own maths
+      // against this, so a drift in the multiplier table shows up instead of
+      // quietly printing a wrong rate.
+      eraMaxBps: Number(sheet.eraMaxBps),
       // mcapUsd is priced on TOTAL supply while the floors divide by CIRCULATING
       // — a 32x different denominator. Never present them as comparable.
       mcap: {
         'Market cap (VBSO)': new Amount(USD, sheet.mcapUsd),
-        'Circulating VY': new Amount(VY, circulatingVY),
-        'Circulating market cap': new Amount(USD, vyToUsd(circulatingVY)),
       },
       vyOracle: vyOracleAddress,
       // Exact wei for the stress-curve validation gate. Round-tripping these
@@ -778,7 +890,7 @@ function Content({ data }: { data: MonitorData }) {
       {data.balanceSheet && (
         <div>
           <h2>
-            Balance Sheet — backing per VY{' '}
+            Balance Sheet{' '}
             <a href={`https://etherscan.io/address/${VBSO_ADDRESS}`} target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>
               VBSO ↗ Etherscan
             </a>
@@ -790,32 +902,23 @@ function Content({ data }: { data: MonitorData }) {
 
             <BackingTiles floors={data.balanceSheet.floors} />
 
-            <div className="vy-note">
-              These three are published together on purpose. <strong>Floor (hard)</strong> is
-              what the system holds in coin, net of staker debt — the number that does not
-              depend on the loan book. Equity in the sheet below is larger because it also
-              counts <strong>covered loans</strong>, currently{' '}
-              {(100 * data.balanceSheet.floors.coveredLoansUsd / Math.max(data.balanceSheet.floors.equityUsd, 1e-9)).toFixed(0)}%
-              of it, and those loans are <strong>collateralised in VY</strong> — an equity
-              figure that is partly a claim about VY priced in VY, which is why it is not
-              shown here as a headline price. Only{' '}
-              {(100 * data.balanceSheet.floors.coveredLoansUsd / Math.max(data.balanceSheet.floors.loansFaceUsd, 1e-9)).toFixed(1)}%
-              of the ${Math.round(data.balanceSheet.floors.loansFaceUsd).toLocaleString('en-US')} face
-              loan book passes the coverage gate at all.
-            </div>
+
+            <h3 style={{ marginTop: '1.25rem' }}>Holdings, debt and equity</h3>
+            <HoldingsTable table={data.balanceSheet.assetTable} />
 
             <h3 style={{ marginTop: '1.25rem' }}>Sheet</h3>
             {renderValues(data.balanceSheet.rows)}
 
+            <h3 style={{ marginTop: '1rem' }}>Era</h3>
+            <EraLadder
+              era={data.balanceSheet.era}
+              mcapUsd={data.balanceSheet.floors.mcapUsd}
+              anchorBps={data.balanceSheet.anchorBps}
+              liveEraMaxBps={data.balanceSheet.eraMaxBps}
+            />
+
             <h3 style={{ marginTop: '1rem' }}>Market cap</h3>
             {renderValues(data.balanceSheet.mcap)}
-            <div className="vy-note">
-              VBSO's <code>mcapUsd</code> prices <strong>total</strong> supply
-              ({Math.round(data.balanceSheet.floors.mcapUsd / Math.max(data.balanceSheet.floors.market, 1e-9)).toLocaleString('en-US')} VY),
-              while the floors divide by <strong>circulating</strong>
-              ({Math.round(data.balanceSheet.floors.circulating).toLocaleString('en-US')} VY).
-              Different denominators — do not compare them directly.
-            </div>
           </div>
         </div>
       )}
