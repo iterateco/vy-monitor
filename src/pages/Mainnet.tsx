@@ -485,7 +485,23 @@ const fetchData = async () => {
 
   const sheetRaw = vbsoResults[0].status === 'success'
     ? vbsoResults[0].result as unknown as readonly bigint[]
-    : (() => { vbsoErrors.push(`sheet: ${(vbsoResults[0].error as Error)?.message ?? 'reverted'}`); return null; })();
+    : (() => {
+        const msg = (vbsoResults[0].error as Error)?.message ?? 'reverted';
+        // PriceUnavailable() is the whole view surface's single revert selector:
+        // VAO remaps every oracle failure onto it. In practice it means a UniV3
+        // TWAP went past `maxObservationAge` — the pool's tick has not moved, so
+        // no new observation was written — and the sheet fail-closes rather than
+        // value the book at a stale mark. It clears itself on the next write.
+        vbsoErrors.push(
+          msg.includes('PriceUnavailable')
+            ? 'Balance sheet unavailable — VBSO.sheet() reverted PriceUnavailable(). An asset '
+              + 'oracle is fail-closed: a Uniswap V3 TWAP aged past the VAO guard, so the sheet '
+              + 'refuses to value the book at a stale mark. This clears itself as soon as the '
+              + 'pool writes a new observation. Run `node oracle-watch.mjs --once` for the pool.'
+            : `sheet: ${msg}`
+        );
+        return null;
+      })();
 
   const sheet = sheetRaw && {
     hardAssetsUsd: sheetRaw[0], coveredLoansUsd: sheetRaw[1], loansFaceUsd: sheetRaw[2],
@@ -776,6 +792,10 @@ const fetchData = async () => {
       },
       errors: vbsoErrors,
     },
+    // Hoisted out of `balanceSheet` deliberately: when sheet() reverts, the object
+    // above is null and an errors array nested inside it would be discarded exactly
+    // when it is the only thing left worth showing.
+    balanceSheetErrors: vbsoErrors,
     // Rendered with a verbatim-label table, not renderValues — startCase would
     // turn "VY/USDC — USDC side" into "VY USDC USDC Side".
     clav: [
@@ -965,7 +985,7 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
         </div>
       </div>
 
-      {data.balanceSheet && (
+      {(data.balanceSheet || data.balanceSheetErrors.length > 0) && (
         <div>
           <h2>
             Balance Sheet{' '}
@@ -973,11 +993,15 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
               VBSO ↗ Etherscan
             </a>
           </h2>
-          <div className={`box ${data.balanceSheet.errors.length > 0 ? 'box--error' : ''}`}>
-            {data.balanceSheet.errors.map((err, i) => (
+          {/* The heading and the error banner render even with no sheet. A section
+              that silently disappears reads as "nothing to report" — the opposite
+              of what an outage means. */}
+          <div className={`box ${data.balanceSheetErrors.length > 0 ? 'box--error' : ''}`}>
+            {data.balanceSheetErrors.map((err, i) => (
               <div key={i} className="error-item">✗ {err}</div>
             ))}
 
+            {data.balanceSheet && (<>
             <BackingTiles floors={data.balanceSheet.floors} />
 
 
@@ -997,6 +1021,7 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
 
             <h3 style={{ marginTop: '1rem' }}>Market cap</h3>
             {renderValues(data.balanceSheet.mcap)}
+            </>)}
           </div>
         </div>
       )}

@@ -110,4 +110,14 @@ export default [
     inputs: [],
     outputs: [{ type: 'address' }],
   },
+  // ── Custom errors ────────────────────────────────────────────────────────
+  // Declared so viem decodes a revert to its NAME instead of a bare selector.
+  // The view surface funnels everything through PriceUnavailable(): VAO's own
+  // reverts (UniV3 'OLD', stale observation, PoolDoesNotExist) are all remapped
+  // to it, so a sheet() failure with this selector means an oracle is refusing
+  // to price an asset — not that the sheet is wrong.
+  { type: 'error', name: 'PriceUnavailable', inputs: [] },
+  { type: 'error', name: 'VmmoNotWired', inputs: [] },
+  { type: 'error', name: 'AccumulatorsNotLive', inputs: [] },
+  { type: 'error', name: 'LegacyMigrationPending', inputs: [] },
 ] as const;

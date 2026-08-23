@@ -311,7 +311,17 @@ export function TradingVolume({
   if (!volume) {
     return (
       <div className="vy-vol">
-        <div className="vy-vol__title">Trading volume</div>
+        <div className="vy-vol__title">
+        Trading volume{' '}
+        <a
+          href="https://etherscan.io/token/0x597b29520098d6aaca3B2e0D1a380315c9240454"
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 }}
+        >
+          VY ↗ Etherscan
+        </a>
+      </div>
         <div className="vy-vol__loading">
           {progress && progress.total > 0
             ? `indexing VY transactions… ${progress.done.toLocaleString('en-US')} / ${progress.total.toLocaleString('en-US')}`
@@ -323,7 +333,17 @@ export function TradingVolume({
   const { rows, totals } = volume;
   return (
     <div className="vy-vol">
-      <div className="vy-vol__title">Trading volume</div>
+      <div className="vy-vol__title">
+        Trading volume{' '}
+        <a
+          href="https://etherscan.io/token/0x597b29520098d6aaca3B2e0D1a380315c9240454"
+          target="_blank"
+          rel="noreferrer"
+          style={{ fontWeight: 'normal', textTransform: 'none', letterSpacing: 0 }}
+        >
+          VY ↗ Etherscan
+        </a>
+      </div>
       <table className="vy-vol__table">
         <thead>
           <tr>
