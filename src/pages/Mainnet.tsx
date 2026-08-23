@@ -598,43 +598,30 @@ const fetchData = async () => {
     return { ...t, held, debt, heldUsd: toUsd(held), debtUsd: toUsd(debt), px };
   });
 
-  const usdcRow = raw.find((r) => r.sym === 'USDC');
-  const hardRows = raw.filter((r) => r.sym !== 'USDC');
-  const hardHeldUsd = hardRows.reduce((n, r) => n + r.heldUsd, 0);
-  // Exact as a total: the slice of the USDC book not sitting in USDC. The per-asset
-  // split is pro-rata on holdings — nothing on chain tags which WBTC came from which
-  // USDC, so this is a presentation split and is labelled as one.
-  const investedTotal = usdcRow ? Math.max(0, usdcRow.debtUsd - usdcRow.heldUsd) : 0;
-
   const fmtNative = (v: bigint, d: number) => {
     const n = num(v, d);
     return n === 0 ? '0' : n < 0.0001 ? n.toExponential(2)
       : n.toLocaleString('en-US', { maximumFractionDigits: n < 1 ? 6 : 4 });
   };
 
-  // Debt is shown against the asset that actually backs it: the USDC book's
-  // invested slice moves off the USDC row and onto WETH/WBTC/PAXG. Totals are
-  // unchanged by the move; what it buys is that every row now reconciles
-  // holdings − debt = equity, instead of only the totals doing so.
+  // Every figure is the asset's OWN: what it holds, what it owes, the difference.
+  // An earlier version spread the USDC book's invested slice pro-rata onto
+  // WBTC/WETH/PAXG so no row could go negative. That flattered the USDC row — it
+  // showed $22k owed against a real $43k — and the pro-rata split was invented by
+  // this file, not by anything on chain. Raw is the truth: USDC owes far more than
+  // it holds because stakers' USDC was spent on hard assets, and the hard assets
+  // hold far more than they owe. Totals are identical either way.
   const assetTable = {
     rows: raw.map((r) => {
-      const share = hardHeldUsd > 0 && r.sym !== 'USDC' ? r.heldUsd / hardHeldUsd : 0;
-      const debtUsd = r.sym === 'USDC'
-        ? Math.max(0, r.debtUsd - investedTotal)   // the part still sitting in USDC
-        : r.debtUsd + investedTotal * share;       // own debt + the USDC slice it holds
-      const pxUsd = Number(r.px) / 1e18;
       return {
         symbol: r.sym,
         heldNative: fmtNative(r.held, r.decimals),
         heldUsd: r.heldUsd,
-        // Native equivalent of the merged figure — the amount of THIS asset it
-        // would take to settle it. The raw staker-debt balance is no longer the
-        // whole story once the USDC slice lands here.
-        debtNative: pxUsd > 0
-          ? (debtUsd / pxUsd).toLocaleString('en-US', { maximumFractionDigits: debtUsd / pxUsd < 1 ? 6 : 4 })
-          : '—',
-        debtUsd,
-        equityUsd: Math.max(0, r.heldUsd - debtUsd),
+        debtNative: fmtNative(r.debt, r.decimals),
+        debtUsd: r.debtUsd,
+        // NOT clamped at zero: a negative row is the real position and hiding it
+        // behind a $0 would misreport exactly the row that matters most.
+        equityUsd: r.heldUsd - r.debtUsd,
       };
     }),
     totals: (() => {

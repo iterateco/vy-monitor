@@ -143,8 +143,11 @@ export type AssetTable = {
   totals: { held: number; debt: number; equity: number; ratio: number };
 };
 
+// Minus sign OUTSIDE the dollar sign — `'$' + (-20921).toLocaleString()` would
+// render "$-20,921". Rows can legitimately go negative now that debt is shown per
+// asset rather than spread, so this is a live path, not a defensive branch.
 const money = (n: number) =>
-  '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  (n < 0 ? '\u2212$' : '$') + Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
 function Col({
   title, sub, children, accent,
@@ -180,17 +183,19 @@ export function HoldingsTable({ table }: { table: AssetTable }) {
           <div className="vy-col__total">{money(totals.held)}</div>
         </Col>
 
-        <Col title="Debt" sub="principal + unclaimed yield, on the asset backing it" accent="var(--vy-series-2)">
+        <Col title="Debt" sub="principal + unclaimed yield, per asset" accent="var(--vy-series-2)">
           {rows.map((r) => <Cell key={r.symbol} sym={r.symbol} native={r.debtNative} usd={r.debtUsd} />)}
           <div className="vy-col__total">{money(totals.debt)}</div>
         </Col>
 
-        <Col title="Equity" sub="held, beyond every debt">
+        <Col title="Equity" sub="holdings minus debt">
           {rows.map((r) => (
             <div className="vy-cell" key={r.symbol}>
               <div className="vy-cell__sym">{r.symbol}</div>
               <div className="vy-cell__native">&nbsp;</div>
-              <div className="vy-cell__usd">{money(r.equityUsd)}</div>
+              <div className={`vy-cell__usd${r.equityUsd < 0 ? ' vy-cell__usd--neg' : ''}`}>
+                {money(r.equityUsd)}
+              </div>
             </div>
           ))}
           <div className="vy-col__total">{money(totals.equity)}</div>

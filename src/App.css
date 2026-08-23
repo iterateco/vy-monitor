@@ -285,6 +285,13 @@ th {
   font-variant-numeric: tabular-nums;
 }
 
+/* A negative equity row is real information, not an error state: it means that
+   asset's stakers are owed more of it than we hold, because their deposit was
+   spent on the other assets. Warm-toned so it reads as "look here", not "broken". */
+.vy-cell__usd--neg {
+  color: var(--vy-series-2);
+}
+
 .vy-col__total {
   margin-top: 0.45rem;
   padding-top: 0.4rem;
