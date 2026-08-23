@@ -14,7 +14,7 @@ const DAX            = '0xD256C672616f7c5DEE3e42a8199f121EE08401B7';
 const VDAX           = '0xD985C0EA5394f9A1acece695885cbD5210d5A1f9';
 const VY_USDC_POOL   = '0xf96cCac0bfd5de8d1F69EA9F9f43ed3B174c2705';
 const VYT            = '0xe58E29c947013B4CBCdb67f90d659c3894BE2974';
-const VRT            = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
+const VCT            = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
 const DEPLOYER       = '0x8310eA7EC55A7Ad6A4288aF683155A124A524a09';
 const MEV_BOT        = '0xA1B8d744B4c6498aBE473c320B46d581Cc9D33A4';
 const BUYBACK        = '0x4B97D45d276084c1C5BDBd0aa29B417cE02bE2F6';
@@ -28,7 +28,7 @@ const KNOWN = {
   [VDAX.toLowerCase()]: 'VDAX',
   [VY_USDC_POOL.toLowerCase()]: 'VyUsdcPool',
   [VYT.toLowerCase()]: 'VYT',
-  [VRT.toLowerCase()]: 'VRT',
+  [VCT.toLowerCase()]: 'VCT',
   [DEPLOYER.toLowerCase()]: 'Deployer',
   [MEV_BOT.toLowerCase()]: 'MEVBot',
   [BUYBACK.toLowerCase()]: 'Buyback',

@@ -2,7 +2,7 @@
  * VBSO — Valinity Balance Sheet Officer (proxy 0xDFd145401122d62987c6a363e370F4DB759BE1b4).
  *
  * The company balance sheet, all USD at 1e18. This is now the authoritative
- * backing source: the hard assets moved out of the VRT into the DAX, so any
+ * backing source: the hard assets moved out of the VCT into the DAX, so any
  * panel that reads treasury balances for backing reads ~0 and is lying by
  * omission. Read sheet() instead.
  *

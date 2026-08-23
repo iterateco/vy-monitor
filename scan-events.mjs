@@ -8,7 +8,7 @@ import { mainnet } from 'viem/chains';
 
 const VY_TOKEN        = '0x597b29520098d6aaca3B2e0D1a380315c9240454';
 const VYT             = '0xe58E29c947013B4CBCdb67f90d659c3894BE2974';
-const VRT             = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
+const VCT             = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
 const CAP_OFFICER     = '0x2f02415989C3e02061a8e451EF64Dc59e5c0051C';
 const ACQ_OFFICER     = '0x7a0E582479579e1423bc4f1DFD0750feA9282B01';
 const PORTAL          = '0xF612C21161F400AbA27A0ef18b030350898b7628';
@@ -21,7 +21,7 @@ const ZERO            = '0x0000000000000000000000000000000000000000';
 
 const KNOWN_CONTRACTS = {
   [VYT.toLowerCase()]: 'VYT',
-  [VRT.toLowerCase()]: 'VRT',
+  [VCT.toLowerCase()]: 'VCT',
   [CAP_OFFICER.toLowerCase()]: 'CapOfficer',
   [ACQ_OFFICER.toLowerCase()]: 'AcqOfficer',
   [PORTAL.toLowerCase()]: 'Portal',
@@ -174,7 +174,7 @@ async function main() {
   }
   console.log(`  TOTAL Fees to Treasury: ${fmt(totalFeesToTreasury)} VY\n`);
 
-  // ─── 8. Scan all VY transfers FROM VYT and VRT ───
+  // ─── 8. Scan all VY transfers FROM VYT and VCT ───
   console.log('=== 8. VY OUTFLOWS FROM TREASURIES ===');
   const vytOutflows = await client.getLogs({
     address: VY_TOKEN,
@@ -183,10 +183,10 @@ async function main() {
     fromBlock: 0n,
     toBlock: latestBlock,
   });
-  const vrtOutflows = await client.getLogs({
+  const vctOutflows = await client.getLogs({
     address: VY_TOKEN,
     event: parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)'),
-    args: { from: VRT },
+    args: { from: VCT },
     fromBlock: 0n,
     toBlock: latestBlock,
   });
@@ -200,14 +200,14 @@ async function main() {
   }
   console.log(`  Total VYT outflow: ${fmt(totalVytOut)} VY\n`);
 
-  let totalVrtOut = 0n;
-  console.log('  VRT outflows:');
-  for (const log of vrtOutflows) {
+  let totalVctOut = 0n;
+  console.log('  VCT outflows:');
+  for (const log of vctOutflows) {
     const { to, value } = log.args;
-    totalVrtOut += value;
+    totalVctOut += value;
     console.log(`    Block ${log.blockNumber}: ${fmt(value)} VY → ${label(to)}`);
   }
-  console.log(`  Total VRT outflow: ${fmt(totalVrtOut)} VY\n`);
+  console.log(`  Total VCT outflow: ${fmt(totalVctOut)} VY\n`);
 
   // ─── 9. Check VY token transfer fee config ───
   console.log('=== 9. TRANSFER FEE CONFIG (AcquisitionOfficer) ===');
@@ -243,7 +243,7 @@ async function main() {
   console.log(`Total fees processed:          ${fmt(totalFeesProcessed)} VY`);
   console.log(`Total fees to treasury:        ${fmt(totalFeesToTreasury)} VY`);
   console.log(`VYT total outflow:             ${fmt(totalVytOut)} VY`);
-  console.log(`VRT total outflow:             ${fmt(totalVrtOut)} VY`);
+  console.log(`VCT total outflow:             ${fmt(totalVctOut)} VY`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

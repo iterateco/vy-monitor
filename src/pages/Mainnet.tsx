@@ -58,7 +58,7 @@ const fetchData = async () => {
 
     // Collateral-only calls. The VCO cap/metrics and VRYO allocator reads that used
     // to live here were deleted with the Valinity Reserves panel: they fed only that
-    // panel, and on-chain they now return zeros (every hard asset left the VRT).
+    // panel, and on-chain they now return zeros (every hard asset left the VCT).
     // Spot price still feeds DAX/VDAODAX/VMMO valuation; getAssetView still feeds
     // the loan totals.
     const collateralContracts = isCollateral ? [
@@ -171,7 +171,7 @@ const fetchData = async () => {
 
   const tokenHolders = [
     'ValinityYieldTreasury',
-    'ValinityReserveTreasury',
+    'ValinityCollateralTreasury',
   ] as const;
 
   const tokenHolderReads = tokenHolders.map(name => {
@@ -208,13 +208,8 @@ const fetchData = async () => {
   const totalUncollateralized = (
     vyTotalSupply -
     balanceMap.ValinityYieldTreasury[0].value -
-    balanceMap.ValinityReserveTreasury[0].value
+    balanceMap.ValinityCollateralTreasury[0].value
   );
-
-  let tvl = 0n;
-  for (const asset of assets) {
-    tvl += asset.totalLoanedUSD.value as bigint;
-  }
 
   // Check if any collateral asset has config warnings (pools not ready)
   const hasConfigWarnings = overviewWarnings.length > 0 ||
@@ -444,29 +439,26 @@ const fetchData = async () => {
   );
   const totalVyBoughtBack = oldVyBoughtBack + newVyBoughtBack;
 
-  // REMOVED 2026-08-20 — the whole VRT / VCO / VRYO reporting layer.
+  // REMOVED 2026-08-20 — the whole VCT / VCO / VRYO reporting layer.
   //
   // Gone with it: the "Valinity Reserves" panel and its per-asset cards, Cap
   // Health, VCO caps, VRYO caps, Round Floor, and the per-asset reserve balances.
-  // Every one of those was computed from VRT treasury balances or
+  // Every one of those was computed from VCT treasury balances or
   // VCO.getAssetMetrics().ltvF, and on-chain both now read exactly zero for
   // WETH/WBTC/PAXG (verified: totalReserve 0, ltvF 0) because all hard assets
-  // moved out of the VRT into the DAX. They had stopped being stale and started
+  // moved out of the VCT into the DAX. They had stopped being stale and started
   // being FALSE — rendering $0.00 backing, and a red cap-mismatch alert nobody
   // could act on, for a system holding real collateral.
   //
   // Backing per VY now comes from VBSO.sheet(); see `balanceSheet` below.
   //
-  // STILL LOAD-BEARING, do not delete: the VRT's *VY* balance. It holds ~10.2M VY
-  // and circulating supply is totalSupply − VYT − VRT, which is the divisor for
+  // STILL LOAD-BEARING, do not delete: the VCT's *VY* balance. It holds ~10.2M VY
+  // and circulating supply is totalSupply − VYT − VCT, which is the divisor for
   // every per-VY floor on the balance sheet. Removing it would inflate the floors
   // by roughly 20x.
 
-  const daxTVL = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
-  tvl += daxTVL;
-
   // ─── VBSO — the company balance sheet ──────────────────────
-  // Authoritative backing source. All hard assets moved out of the VRT into the
+  // Authoritative backing source. All hard assets moved out of the VCT into the
   // DAX, so every treasury-balance panel now reads ~0; sheet() is the truth.
   const vbsoConfig = getContractConfig('ValinityBalanceSheetOfficer');
   const vbsoErrors: string[] = [];
@@ -520,7 +512,7 @@ const fetchData = async () => {
   const vyOracleAddress = vbsoResults[2].status === 'success'
     ? vbsoResults[2].result as Address
     : null;
-  // VCO is retired down to this single call; it matches totalSupply − VRT − VYT exactly.
+  // VCO is retired down to this single call; it matches totalSupply − VCT − VYT exactly.
   const circulatingVY = vbsoResults[3].status === 'success'
     ? vbsoResults[3].result as unknown as bigint
     : totalUncollateralized;
@@ -712,7 +704,7 @@ const fetchData = async () => {
   //   • VDAODAX   → priced side ×2 — its pair token (VGC) has no USD market, and
   //                 constant-product parity imputes the unpriced leg
   //   • VMMO      → idle market-maker inventory, counted once (it is not a pool)
-  // The VRT is deliberately NOT added: its hard assets moved into the DAX, so its
+  // The VCT is deliberately NOT added: its hard assets moved into the DAX, so its
   // balances are ~0 and adding them would double-count the DAX rows.
   const daxAssetSideUSD = daxPools.reduce((sum, p) => sum + (p.reserveAssetUSD.value as bigint), 0n);
   const daxVySideUSD = daxPools.reduce((sum, p) => sum + vyToUsd(p.reserveVY.value as bigint), 0n);
@@ -729,10 +721,6 @@ const fetchData = async () => {
   return {
     circulatingSupply: new Amount(VY, totalUncollateralized),
     vyTotalSupply: new Amount(VY, vyTotalSupply),
-    overview: {
-      TVL: new Amount(USD, tvl),
-      'CLAV (Current Liquid Assets Value)': new Amount(USD, liquidAssetsUSD),
-    },
     balanceSheet: sheet && {
       floors: {
         projected: projection ? Number(projection.vyPriceUsd) / 1e18 : null,
@@ -963,6 +951,22 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
 
   return (
     <div className="monitor">
+      {/* Health banner. The Current Stats box is gone but its diagnostics are not:
+          this is the only surface for a reverted totalSupply, an unavailable pool
+          reserve, or a VMMO asset silently dropped from CLAV. Renders nothing when
+          everything is healthy, so it costs no space in normal operation. */}
+      {(data.overviewErrors.length > 0 || data.overviewWarnings.length > 0) && (
+        <div>
+          <div className={`box ${data.overviewErrors.length > 0 ? 'box--error' : 'box--warning'}`}>
+            {data.overviewErrors.map((err, i) => (
+              <div key={`e${i}`} className="error-item">✗ {err}</div>
+            ))}
+            {data.overviewWarnings.map((warn, i) => (
+              <div key={`w${i}`} className="warning-item">⚠ {warn}</div>
+            ))}
+          </div>
+        </div>
+      )}
       <div>
         <h2>Balances <a href="https://etherscan.io/address/0xe58E29c947013B4CBCdb67f90d659c3894BE2974" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>VYT ↗ Etherscan</a></h2>
         <div className="box vy-split">
@@ -1042,27 +1046,6 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
               ))}
             </tbody>
           </table>
-        </div>
-      </div>
-
-      <div>
-        <h2>Current Stats</h2>
-        <div className={`box ${data.overviewErrors.length > 0 ? 'box--error' : data.overviewWarnings.length > 0 ? 'box--warning' : ''}`}>
-          {data.overviewErrors.length > 0 && (
-            <div className="error-list">
-              {data.overviewErrors.map((err, i) => (
-                <div key={i} className="error-item">✗ {err}</div>
-              ))}
-            </div>
-          )}
-          {data.overviewWarnings.length > 0 && (
-            <div className="warning-list">
-              {data.overviewWarnings.map((warn, i) => (
-                <div key={i} className="warning-item">⚠ {warn}</div>
-              ))}
-            </div>
-          )}
-          {renderValues(data.overview)}
         </div>
       </div>
 

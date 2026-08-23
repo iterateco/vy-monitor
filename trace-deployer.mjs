@@ -8,7 +8,7 @@ import { mainnet } from 'viem/chains';
 const VY_TOKEN     = '0x597b29520098d6aaca3B2e0D1a380315c9240454';
 const DEPLOYER     = '0x8310eA7EC55A7Ad6A4288aF683155A124A524a09';
 const VYT          = '0xe58E29c947013B4CBCdb67f90d659c3894BE2974';
-const VRT          = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
+const VCT          = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
 const CAP_OFFICER  = '0x2f02415989C3e02061a8e451EF64Dc59e5c0051C';
 const LOAN_OFFICER = '0x8Fd8d5eB23f520D9BF8863364Ed44dbb29769DE4';
 const PORTAL       = '0xF612C21161F400AbA27A0ef18b030350898b7628';
@@ -21,7 +21,7 @@ const STAKING_ROUTER = '0x664b3A81C963F07C1eb06516c560f9b2193698C7';
 
 const KNOWN = {
   [VYT.toLowerCase()]: 'VYT',
-  [VRT.toLowerCase()]: 'VRT',
+  [VCT.toLowerCase()]: 'VCT',
   [CAP_OFFICER.toLowerCase()]: 'CapOfficer',
   [LOAN_OFFICER.toLowerCase()]: 'LoanOfficer',
   [PORTAL.toLowerCase()]: 'Portal',

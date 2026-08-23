@@ -1,7 +1,7 @@
 export default [
   {
     // VCO is retired down to this one call. It equals
-    // VY.totalSupply − balanceOf(VRT) − balanceOf(VYT) exactly (verified on-chain),
+    // VY.totalSupply − balanceOf(VCT) − balanceOf(VYT) exactly (verified on-chain),
     // and is the divisor for every per-VY figure on the balance sheet.
     "inputs": [],
     "name": "getTotalCirculatingVY",

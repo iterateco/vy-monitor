@@ -10,7 +10,7 @@ export const CONTRACT_ACRONYMS: Record<string, string> = {
   Admin: 'Admin',
   ValinityToken: 'VY',
   ValinityYieldTreasury: 'VYT',
-  ValinityReserveTreasury: 'VRT',
+  ValinityCollateralTreasury: 'VCT',
   ValinityCapOfficer: 'VCO',
   ValinityLoanOfficer: 'VLO',
   ValinityBalanceSheetOfficer: 'VBSO',

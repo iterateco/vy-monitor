@@ -1,7 +1,7 @@
 /**
  * On-chain health check: verify that circulating VY supply == sum of collateral caps.
  *
- * Circulating = TotalSupply - VYT_balance - VRT_balance
+ * Circulating = TotalSupply - VYT_balance - VCT_balance
  * Expected:    sum(collateralCap) for WETH + WBTC + PAXG  (from CapOfficer)
  *
  * The caps may be SLIGHTLY HIGHER than circulating because tx fees
@@ -15,7 +15,7 @@ import { mainnet } from 'viem/chains';
 // ─── Addresses ───────────────────────────────────────────────
 const VY_TOKEN        = '0x597b29520098d6aaca3B2e0D1a380315c9240454';
 const VYT             = '0xe58E29c947013B4CBCdb67f90d659c3894BE2974'; // ValinityYieldTreasury
-const VRT             = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832'; // ValinityReserveTreasury
+const VCT             = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832'; // ValinityCollateralTreasury
 const CAP_OFFICER     = '0x2f02415989C3e02061a8e451EF64Dc59e5c0051C'; // ValinityCapOfficer
 
 const WETH = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2';
@@ -68,14 +68,14 @@ async function main() {
   const MEV_BOT         = '0xA1B8d744B4c6498aBE473c320B46d581Cc9D33A4';
 
   const [
-    totalSupply, vytBalance, vrtBalance,
+    totalSupply, vytBalance, vctBalance,
     wethMetrics, wbtcMetrics, paxgMetrics,
     vcoBalance, portalBalance, daxBalance, buybackBalance,
     stakingBalance, poolBalance, deployerBalance, mevBotBalance
   ] = await Promise.all([
     client.readContract({ address: VY_TOKEN, abi: erc20Abi, functionName: 'totalSupply' }),
     client.readContract({ address: VY_TOKEN, abi: erc20Abi, functionName: 'balanceOf', args: [VYT] }),
-    client.readContract({ address: VY_TOKEN, abi: erc20Abi, functionName: 'balanceOf', args: [VRT] }),
+    client.readContract({ address: VY_TOKEN, abi: erc20Abi, functionName: 'balanceOf', args: [VCT] }),
     client.readContract({ address: CAP_OFFICER, abi: capOfficerAbi, functionName: 'getAssetMetrics', args: [WETH] }),
     client.readContract({ address: CAP_OFFICER, abi: capOfficerAbi, functionName: 'getAssetMetrics', args: [WBTC] }),
     client.readContract({ address: CAP_OFFICER, abi: capOfficerAbi, functionName: 'getAssetMetrics', args: [PAXG] }),
@@ -92,7 +92,7 @@ async function main() {
   const fmt = (v) => formatUnits(v, 18);
 
   // ── Circulating ────────────────────────────────────────────
-  const circulating = totalSupply - vytBalance - vrtBalance;
+  const circulating = totalSupply - vytBalance - vctBalance;
 
   // ── Sum of caps ────────────────────────────────────────────
   const wethCap = wethMetrics.collateralCap;
@@ -106,7 +106,7 @@ async function main() {
   console.log('=== VY Supply Breakdown ===');
   console.log(`  Total Supply:       ${fmt(totalSupply)} VY`);
   console.log(`  VYT Balance:        ${fmt(vytBalance)} VY  (locked)`);
-  console.log(`  VRT Balance:        ${fmt(vrtBalance)} VY  (locked)`);
+  console.log(`  VCT Balance:        ${fmt(vctBalance)} VY  (locked)`);
   console.log(`  Circulating:        ${fmt(circulating)} VY`);
   console.log('');
   console.log('=== Collateral Caps (CapOfficer) ===');
@@ -136,7 +136,7 @@ async function main() {
   console.log('');
   console.log('=== VY Balances in All Contracts ===');
   console.log(`  VYT (locked):         ${fmt(vytBalance)} VY`);
-  console.log(`  VRT (locked):         ${fmt(vrtBalance)} VY`);
+  console.log(`  VCT (locked):         ${fmt(vctBalance)} VY`);
   console.log(`  CapOfficer (VCO):     ${fmt(vcoBalance)} VY`);
   console.log(`  Portal:               ${fmt(portalBalance)} VY`);
   console.log(`  DAX:                  ${fmt(daxBalance)} VY`);
@@ -145,7 +145,7 @@ async function main() {
   console.log(`  VY/USDC Pool:         ${fmt(poolBalance)} VY`);
   console.log(`  Deployer:             ${fmt(deployerBalance)} VY`);
   console.log(`  MEV Bot:              ${fmt(mevBotBalance)} VY`);
-  const allKnown = vytBalance + vrtBalance + vcoBalance + portalBalance + daxBalance +
+  const allKnown = vytBalance + vctBalance + vcoBalance + portalBalance + daxBalance +
                    buybackBalance + stakingBalance + poolBalance + deployerBalance + mevBotBalance;
   const unaccounted = totalSupply - allKnown;
   console.log(`  ---`);

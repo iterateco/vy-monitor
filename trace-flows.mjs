@@ -4,7 +4,7 @@
  * 
  * Key findings from scan:
  * - VYT sent VY to MEV Bot (0xA1B8d744) and AcqOfficer
- * - VRT sent VY to LoanOfficer (0x8Fd8d5eB) and VYT
+ * - VCT sent VY to LoanOfficer (0x8Fd8d5eB) and VYT
  * - No VY burned, no acquisitions occurred, no fees processed
  * - Need to trace where MEV Bot and AcqOfficer VY ended up
  */
@@ -18,7 +18,7 @@ const ACQ_OFFICER  = '0x7a0E582479579e1423bc4f1DFD0750feA9282B01';
 const LOAN_OFFICER = '0x8Fd8d5eB23f520D9BF8863364Ed44dbb29769DE4';
 const CAP_OFFICER  = '0x2f02415989C3e02061a8e451EF64Dc59e5c0051C';
 const VYT          = '0xe58E29c947013B4CBCdb67f90d659c3894BE2974';
-const VRT          = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
+const VCT          = '0x06087789B7122fA92E7F9868B10A286Dd4e4C832';
 const PORTAL       = '0xF612C21161F400AbA27A0ef18b030350898b7628';
 const DAX          = '0xD256C672616f7c5DEE3e42a8199f121EE08401B7';
 const BUYBACK      = '0xD2F0826af20EbDc833c8418E312F23f373F8500e';
@@ -33,7 +33,7 @@ const KNOWN = {
   [LOAN_OFFICER.toLowerCase()]: 'LoanOfficer',
   [CAP_OFFICER.toLowerCase()]: 'CapOfficer',
   [VYT.toLowerCase()]: 'VYT',
-  [VRT.toLowerCase()]: 'VRT',
+  [VCT.toLowerCase()]: 'VCT',
   [PORTAL.toLowerCase()]: 'Portal',
   [DAX.toLowerCase()]: 'DAX',
   [BUYBACK.toLowerCase()]: 'Buyback',

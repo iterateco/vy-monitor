@@ -193,7 +193,7 @@ const fetchData = async () => {
 
   const tokenHolders = [
     'ValinityYieldTreasury',
-    'ValinityReserveTreasury',
+    'ValinityCollateralTreasury',
     'ValinityDAX',
     'ValinityBuybackOfficer',
     'ValinityStakingRouter'
@@ -233,7 +233,7 @@ const fetchData = async () => {
   const totalUncollateralized = (
     vyTotalSupply -
     balanceMap.ValinityYieldTreasury[0].value -
-    balanceMap.ValinityReserveTreasury[0].value
+    balanceMap.ValinityCollateralTreasury[0].value
   );
 
   let tvl = 0n;

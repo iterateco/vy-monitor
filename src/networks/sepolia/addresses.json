@@ -2,7 +2,7 @@
   "PoolLevelerArb": "0xf140c1C830027Bb3B07d3500063416D64b002047",
   "ValinityToken": "0x34d7EF14450cd4ec55E825293E783847685b8F07",
   "ValinityYieldTreasury": "0x75A9F66f1Fce7438c5901B7171a3D3b14A646778",
-  "ValinityReserveTreasury": "0xBE2Ecd55736bc34C99Fc275d8558f66ba74d1Fc7",
+  "ValinityCollateralTreasury": "0xBE2Ecd55736bc34C99Fc275d8558f66ba74d1Fc7",
   "ValinityCapOfficer": "0x31e6252Dcf82CF7729Cd0054B7365c87f090DdaD",
   "ValinityLoanOfficer": "0x8015687141Fdc54a7310F6E9F11673C7881D6998",
   "ValinityAcquisitionOfficer": "0x0AC3C13A455b7Df42288727707e00c0a4787baa3",

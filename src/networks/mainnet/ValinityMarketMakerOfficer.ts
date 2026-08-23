@@ -5,7 +5,7 @@
  * the authoritative per-asset source for the holdings table:
  *
  *   heldOf(asset)  — SYSTEM holdings of that asset, summed by VMMOCoverageLib:
- *                    VRT reserve + its DAX pool leg + VMMO's undeployed book +
+ *                    VCT reserve + its DAX pool leg + VMMO's undeployed book +
  *                    the VDAO-DAX balance (+ our pair USDC share, USDC only).
  *                    The same five sources VBSO's _hardAssetsFull walks, which is
  *                    why the two agree.
