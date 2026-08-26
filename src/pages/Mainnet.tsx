@@ -360,6 +360,13 @@ const fetchData = async () => {
       }
       const [asset, vdaoToken, reserveAsset, reserveVdao] =
         r.result as unknown as [Address, Address, bigint, bigint];
+
+      // A pool drained on BOTH legs has been retired by the operator. VDAODAX has
+      // no removal path — pools are never deleted, so an eliminated one stays
+      // registered at zero forever. Listing it reads as live liquidity that is not
+      // there. Checked on both legs so a genuinely one-sided pool still shows.
+      if (reserveAsset === 0n && reserveVdao === 0n) continue;
+
       const assetInfo = await resolveToken(asset);
       const vdaoInfo = await resolveToken(vdaoToken);
 
@@ -815,7 +822,12 @@ const fetchData = async () => {
     },
     vdaoDax: {
       overview: {
-        'Num Pools': String(vdaoNumPools),
+        // Active, not registered. They differ once a pool is retired, and the
+        // gap is stated rather than papered over — the registered id is still
+        // on chain and will still be there next time someone counts.
+        'Num Pools': vdaoDaxPools.length < Number(vdaoNumPools)
+          ? `${vdaoDaxPools.length} active (${vdaoNumPools} registered)`
+          : String(vdaoNumPools),
         'Swaps Paused': vdaoDaxSwapsPaused,
       },
       pools: vdaoDaxPools,
