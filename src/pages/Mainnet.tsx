@@ -5,7 +5,7 @@ import { useEffect, useState, type JSX } from 'react';
 import { createPublicClient, http, parseAbiItem, type Address } from 'viem';
 import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
-import { BackingTiles, HoldingsTable, EraLadder, TradingVolume } from '../components/BalanceSheet';
+import { BackingTiles, HoldingsTable, EraLadder, TradingVolume, MarketMakerDesk } from '../components/BalanceSheet';
 import type { VolumeData } from '../components/BalanceSheet';
 import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
 import { Amount, USD, VY } from '../models';
@@ -680,6 +680,184 @@ const fetchData = async () => {
     vmmoInventoryUSD += (bal * 10n ** BigInt(18 - a.currency.decimals) * priceWad) / 10n ** 18n;
     vmmoHeld.push(a.symbol);
   });
+  // --- VMMO desk: the book itself, and the pace it is released at ────────────
+  // Distinct from the CLAV row above, which values the same coins. This reads the
+  // BOOK: `held` is undeployed inventory, `pendingDeploy` is the slice the drip
+  // has already released, and `deployWindow` is how long a whole book takes to
+  // become deployable. Marks come from VBSO.assetUsdPrice so the desk cannot be
+  // valued on a different oracle from the sheet above it.
+  const deskRaw = await client.multicall({
+    contracts: [
+      { ...vmmoConfig, functionName: 'deployWindow', args: [] },
+      { ...vmmoConfig, functionName: 'maxWindow', args: [] },
+      ...tableAssets.flatMap((t) => [
+        { ...vmmoConfig, functionName: 'books', args: [t.address] },
+        { ...vmmoConfig, functionName: 'pendingDeploy', args: [t.address] },
+        { ...vbsoConfig, functionName: 'assetUsdPrice', args: [t.address] },
+        { ...vbsoConfig, functionName: 'assetMultBps', args: [t.address] },
+      ]),
+    ],
+    allowFailure: true,
+  });
+
+  const deskErrors: string[] = [];
+  const deployWindowSec = deskRaw[0].status === 'success'
+    ? Number(deskRaw[0].result as unknown as bigint)
+    : (() => { deskErrors.push('deployWindow: reverted'); return 0; })();
+
+  const maxWindowSec = deskRaw[1].status === 'success'
+    ? Number(deskRaw[1].result as unknown as bigint)
+    : 0;
+
+  // Tier-3 term, its own read: a uint8 arg cannot share a contracts array with
+  // address args without widening the inferred tuple. NOT VMMO.maxWindow() —
+  // that floors the same value at minWindow, making it a proxy for the term
+  // rather than the term.
+  const termRaw = await client.multicall({
+    contracts: [{
+      ...getContractConfig('ValinityStakingRouter'),
+      functionName: 'tierDurationSec',
+      args: [3],
+    }],
+    allowFailure: true,
+  });
+  const tier3TermDays = termRaw[0].status === 'success'
+    ? Math.round(Number(termRaw[0].result as unknown as number) / 86_400)
+    : 0;
+
+  const deskRows = tableAssets.map((t, i) => {
+    const base = 2 + i * 4;
+    const bookRes = deskRaw[base];
+    const book = bookRes.status === 'success'
+      ? bookRes.result as unknown as readonly [bigint, bigint, bigint]
+      : null;
+    if (!book) deskErrors.push(`books(${t.sym}): reverted`);
+    const ready = deskRaw[base + 1].status === 'success'
+      ? deskRaw[base + 1].result as unknown as bigint
+      : 0n;
+    const px = deskRaw[base + 2].status === 'success'
+      ? deskRaw[base + 2].result as unknown as bigint
+      : 0n;
+    const held = book ? book[0] : 0n;
+    const lastAccrual = book ? Number(book[2]) : 0;
+    const toUsd = (v: bigint) => Number((v * px) / 10n ** BigInt(t.decimals)) / 1e18;
+    // Clamped: pendingDeploy accrues against the remainder and settles on the next
+    // poke, so a rounding tick above `held` is possible.
+    const readyClamped = ready > held ? held : ready;
+
+    return {
+      symbol: t.sym,
+      heldNative: fmtNative(held, t.decimals),
+      heldUsd: toUsd(held),
+      readyNative: fmtNative(readyClamped, t.decimals),
+      readyUsd: toUsd(readyClamped),
+      lastAccrual,
+    };
+  });
+
+  // ─── Projected VY as the book deploys ──────────────────────
+  // VBSO only reports the FULLY-deployed price. The intermediate points come from
+  // the same maths, re-derived and validated against the contract to 15 decimals:
+  // the ammo is split across venues pro-rata by depth, so `share/depth` is identical
+  // at every venue and the median collapses to one multiple. That gives
+  //     price(f) = live × (1 + f·(√multiple − 1))²
+  // for a deployed fraction f, which returns exactly `projected` at f = 1.
+  //
+  // f(t) = 1 − e^(−t/W) is VMMO's REAL release curve. Note VBSO's own NatSpec
+  // claims the book "releases linearly over that window" — it does not, and VMMO's
+  // deployWindow() explicitly documents itself as a time constant and "not a drain
+  // time". Using linear here would overstate every intermediate price.
+  // Days until `pct` of TODAY's book has deployed.
+  //
+  // deployWindow is a time constant, not a drain time — release is `1 − e^(−t/W)`
+  // — and W is not even constant: it scales with the book/depth ratio between
+  // minWindow and maxWindow, so a draining book shortens its own window and the
+  // tail runs faster than a fixed-W curve. Integrating `dx/dt = −x/W(x)`
+  // numerically is the only way to get the day right.
+  //
+  // minWindow is `internal` on VMMO with no getter. Read from storage slot 28
+  // (low 4 bytes) on 2026-08-26: 1_814_400 = 21 days. It is admin-settable, so if
+  // the live window ever falls outside [minWindow, maxWindow] this model is stale
+  // and we fall back to the plain fixed-W curve rather than print a wrong day.
+  const VMMO_MIN_WINDOW_SEC = 1_814_400;
+  const daysToDeploy = (pct: number): number | null => {
+    const W0 = deployWindowSec / 86_400;
+    if (W0 <= 0) return null;
+    const minW = VMMO_MIN_WINDOW_SEC / 86_400;
+    const maxW = maxWindowSec / 86_400;
+    if (!(maxW > minW && W0 >= minW && W0 <= maxW)) {
+      return Math.round(-W0 * Math.log(1 - pct)); // fixed-W fallback
+    }
+    const frac0 = (W0 - minW) / (maxW - minW);
+    const target = 1 - pct;
+    let x = 1;
+    let t = 0;
+    const dt = 0.002;
+    while (x > target && t < 10_000) {
+      x -= (x / (minW + (maxW - minW) * frac0 * x)) * dt;
+      t += dt;
+    }
+    return Math.round(t);
+  };
+  const daysTo99 = daysToDeploy(0.99);
+
+  // ─── Max yield per asset, per era ──────────────────────────
+  // quoteYieldBps = anchor × tierShare/BPS × assetMult/BPS. The MAX is the era
+  // ceiling at premium tier 3, where tierShare is the full BPS — so the ceiling
+  // for an asset is simply eraMax × assetMult / BPS.
+  //
+  // Verified against the chain: predicting tier 3 non-premium (share 8333) gives
+  // USDC 1479 / WBTC 690 / WETH 690 / PAXG 887, and quoteYieldBps returns exactly
+  // those. Math.floor at each step replicates the contract's uint16 truncation.
+  //
+  // A multiplier of 0 means UNSET, which the contract resolves to
+  // DEFAULT_ASSET_MULT_BPS (5556) — never to zero. Rendering 0 would invent a 0%
+  // ceiling for an asset that actually earns 55.56% of the anchor.
+  const DEFAULT_ASSET_MULT_BPS = 5_556;
+  const assetMults = tableAssets
+    .map((t, i) => {
+      const r = deskRaw[2 + i * 4 + 3];
+      const raw = r.status === 'success' ? Number(r.result as unknown as number) : 0;
+      return { symbol: t.sym, multBps: raw === 0 ? DEFAULT_ASSET_MULT_BPS : raw };
+    })
+    .sort((a, b) => b.multBps - a.multBps);
+
+  const projCurve = (() => {
+    if (!projection || projection.multipleX <= 0n) return null;
+    const multiple = Number(projection.multipleX) / 1e18;
+    const live = Number(projection.livePriceUsd) / 1e18;
+    const windowDays = Number(projection.deployWindowSec) / 86_400;
+    if (multiple < 1 || live <= 0 || windowDays <= 0) return null;
+    const r = Math.sqrt(multiple) - 1;
+    const at = (f: number) => live * (1 + f * r) ** 2;
+    const point = (label: string, days: number | null) => {
+      const f = days === null ? 1 : 1 - Math.exp(-days / windowDays);
+      return { label, deployedPct: f * 100, priceUsd: at(f) };
+    };
+    return {
+      livePriceUsd: live,
+      rows: [
+        point('7 days', 7),
+        point('30 days', 30),
+        point(`${windowDays.toFixed(0)} days · one window`, windowDays),
+        point('fully deployed', null),
+      ],
+    };
+  })();
+
+  const desk = {
+    deployWindowSec,
+    // Every book accrues on its own clock; the desk is only as current as its
+    // stalest one, so that is the number to surface.
+    stalestAccrual: deskRows.reduce(
+      (acc, r) => (r.lastAccrual > 0 && (acc === 0 || r.lastAccrual < acc) ? r.lastAccrual : acc), 0),
+    rows: deskRows,
+    totalHeldUsd: deskRows.reduce((n, r) => n + r.heldUsd, 0),
+    totalReadyUsd: deskRows.reduce((n, r) => n + r.readyUsd, 0),
+    projCurve,
+    errors: deskErrors,
+  };
+
   const vmmoVY = vmmoRaw[assets.length].status === 'success'
     ? vmmoRaw[assets.length].result as bigint
     : 0n;
@@ -721,6 +899,7 @@ const fetchData = async () => {
         projectedAmmoUsd: projection ? Number(projection.ammoUsd) / 1e18 : 0,
         projectedWindowSec: projection ? Number(projection.deployWindowSec) : 0,
         projectedMultiple: projection ? Number(projection.multipleX) / 1e18 : 0,
+        projectedDaysTo99: daysTo99,
         projectedError: projectionError,
         hard: Number(floorHard) / 1e18,
         borrowUsdPerVy,
@@ -734,7 +913,12 @@ const fetchData = async () => {
         coveredLoansUsd: Number(sheet.coveredLoansUsd) / 1e18,
         loansFaceUsd: Number(sheet.loansFaceUsd) / 1e18,
         stakerDebtUsd: Number(sheet.stakerDebtUsd) / 1e18,
+        // Priced on TOTAL supply, while every per-VY floor above divides by
+        // CIRCULATING — a ~32x different denominator. Never present the two as
+        // comparable. It drives the era ratchet, which is the only thing it is
+        // shown next to.
         mcapUsd: Number(sheet.mcapUsd) / 1e18,
+        vyOracle: vyOracleAddress,
       },
       rows: {
         'Hard assets': new Amount(USD, sheet.hardAssetsUsd),
@@ -758,11 +942,8 @@ const fetchData = async () => {
       // against this, so a drift in the multiplier table shows up instead of
       // quietly printing a wrong rate.
       eraMaxBps: Number(sheet.eraMaxBps),
-      // mcapUsd is priced on TOTAL supply while the floors divide by CIRCULATING
-      // — a 32x different denominator. Never present them as comparable.
-      mcap: {
-        'Market cap (VBSO)': new Amount(USD, sheet.mcapUsd),
-      },
+      assetMults,
+      tier3TermDays,
       vyOracle: vyOracleAddress,
       // Exact wei for the stress-curve validation gate. Round-tripping these
       // through the float `floors` above would fail the equality check every time.
@@ -780,12 +961,13 @@ const fetchData = async () => {
     balanceSheetErrors: vbsoErrors,
     // Rendered with a verbatim-label table, not renderValues — startCase would
     // turn "VY/USDC — USDC side" into "VY USDC USDC Side".
+    // One row per CONTRACT, each at its FULL liquidity — both sides of a pool, not
+    // one line per leg. Splitting DAX and the pair across two rows each made the
+    // reader add them up to get the number that actually matters.
     clav: [
-      { venue: 'DAX', side: 'asset side', value: new Amount(USD, daxAssetSideUSD) },
-      { venue: 'DAX', side: 'VY side', value: new Amount(USD, daxVySideUSD) },
-      { venue: 'VY/USDC (Uniswap)', side: 'USDC side', value: new Amount(USD, uniUsdcSideUSD) },
-      { venue: 'VY/USDC (Uniswap)', side: 'VY side', value: new Amount(USD, uniVySideUSD) },
-      { venue: 'VDAODAX', side: 'both sides (VGC leg imputed)', value: new Amount(USD, vdaoBothSidesUSD) },
+      { venue: 'Valinity Arbitrage Exchange (DAX)', side: 'both sides', value: new Amount(USD, daxAssetSideUSD + daxVySideUSD) },
+      { venue: 'VY/USDC (Uniswap)', side: 'both sides', value: new Amount(USD, uniUsdcSideUSD + uniVySideUSD) },
+      { venue: 'VDAO DAX', side: 'both sides (VGC leg imputed)', value: new Amount(USD, vdaoBothSidesUSD) },
       { venue: 'VMMO (market maker)', side: vmmoHeld.length ? `inventory — ${vmmoHeld.join(' + ')}` : 'inventory (empty)', value: new Amount(USD, vmmoInventoryUSD) },
       { venue: 'CLAV total', side: '', value: new Amount(USD, liquidAssetsUSD), total: true },
     ],
@@ -820,6 +1002,7 @@ const fetchData = async () => {
       pools: daxPools,
       errors: daxErrors,
     },
+    desk,
     vdaoDax: {
       overview: {
         // Active, not registered. They differ once a pool is retired, and the
@@ -1020,10 +1203,10 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
               mcapUsd={data.balanceSheet.floors.mcapUsd}
               anchorBps={data.balanceSheet.anchorBps}
               liveEraMaxBps={data.balanceSheet.eraMaxBps}
+              assetMults={data.balanceSheet.assetMults}
+              tier3TermDays={data.balanceSheet.tier3TermDays}
             />
 
-            <h3 style={{ marginTop: '1rem' }}>Market cap</h3>
-            {renderValues(data.balanceSheet.mcap)}
             </>)}
           </div>
         </div>
@@ -1045,6 +1228,16 @@ function Content({ data, volume, volProgress }: { data: MonitorData; volume: Vol
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div>
+        <h2>Market Making — VMMO <a href="https://etherscan.io/address/0x4b77Afb489672B026b349368837E8a13a4939eaD" target="_blank" rel="noreferrer" style={{ fontWeight: 'normal' }}>↗ Etherscan</a></h2>
+        <div className={`box ${data.desk.errors.length > 0 ? 'box--error' : ''}`}>
+          {data.desk.errors.map((err, i) => (
+            <div key={i} className="error-item">✗ {err}</div>
+          ))}
+          <MarketMakerDesk desk={data.desk} />
         </div>
       </div>
 

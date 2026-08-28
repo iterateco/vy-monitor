@@ -104,6 +104,18 @@ export default [
     outputs: [{ type: 'uint256' }],
   },
   {
+    // Per-asset yield multiplier, bps of the tier rate. USDC anchors at 10000;
+    // every other asset is a fixed discount off it. Read live rather than
+    // hardcoded — governance can retune it with setAssetMult and the ladder follows.
+    // 0 means "unset", which the contract resolves to DEFAULT_ASSET_MULT_BPS (5556),
+    // NOT to 100% — so a zero must never be rendered as a zero rate.
+    type: 'function',
+    name: 'assetMultBps',
+    stateMutability: 'view',
+    inputs: [{ name: 'asset', type: 'address' }],
+    outputs: [{ type: 'uint16' }],
+  },
+  {
     type: 'function',
     name: 'vyOracle',
     stateMutability: 'view',

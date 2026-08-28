@@ -27,6 +27,8 @@ export type Floors = {
   projectedAmmoUsd: number;
   projectedWindowSec: number;
   projectedMultiple: number;
+  /** Days until 99% of today's book has deployed — the horizon the projected price belongs to. */
+  projectedDaysTo99: number | null;
   projectedError: string | null;
   hard: number;
   borrowUsdPerVy: number;
@@ -41,6 +43,8 @@ export type Floors = {
   loansFaceUsd: number;
   stakerDebtUsd: number;
   mcapUsd: number;
+  /** VBSO.vyOracle() — read live, so the tile cites whatever oracle is actually wired. */
+  vyOracle: string | null;
 };
 
 const fmtDays = (sec: number) => {
@@ -73,7 +77,10 @@ export function BackingTiles({ floors }: { floors: Floors }) {
                 {floors.projectedMultiple.toFixed(2)}× live · once VMMO deploys its book
               </div>
               <div className="vy-tile__caveat">
-                ammo {fmtUsd(floors.projectedAmmoUsd, 0)} over {fmtDays(floors.projectedWindowSec)}
+                ammo {fmtUsd(floors.projectedAmmoUsd, 0)}
+                {floors.projectedDaysTo99 !== null && (
+                  <> · 99% deployed in {floors.projectedDaysTo99} days</>
+                )}
               </div>
             </>
           )}
@@ -87,8 +94,15 @@ export function BackingTiles({ floors }: { floors: Floors }) {
           <div className="vy-tile__value" style={{ color: 'var(--vy-ink-2)' }}>
             {fmtUsd(floors.market)}
           </div>
-          <div className="vy-tile__hint">VBSO usdPerVy (TWAP)</div>
-          <div className="vy-tile__caveat">what VY actually trades at</div>
+          <div className="vy-tile__hint">what VY actually trades at</div>
+          <div className="vy-tile__caveat">
+            price read from the official Valinity{' '}
+            {floors.vyOracle ? (
+              <a href={`https://etherscan.io/address/${floors.vyOracle}`} target="_blank" rel="noreferrer">
+                price oracle contract
+              </a>
+            ) : 'price oracle contract'}
+          </div>
         </div>
 
         <div className="vy-tile">
@@ -229,9 +243,14 @@ export function HoldingsTable({ table }: { table: AssetTable }) {
  * they are transcribed here — and the rung for the CURRENT era is checked against
  * the live `eraMaxBps`. A mismatch is shown rather than silently printed wrong.
  */
+export type AssetMult = { symbol: string; multBps: number };
+
 export function EraLadder({
-  era, mcapUsd, anchorBps, liveEraMaxBps,
-}: { era: number; mcapUsd: number; anchorBps: number; liveEraMaxBps: number }) {
+  era, mcapUsd, anchorBps, liveEraMaxBps, assetMults, tier3TermDays,
+}: {
+  era: number; mcapUsd: number; anchorBps: number; liveEraMaxBps: number;
+  assetMults: AssetMult[]; tier3TermDays: number;
+}) {
   const rungs = [
     { era: 0, label: 'Era 0', threshold: 0, multBps: 10_000 },
     { era: 1, label: '$7M', threshold: 7_000_000, multBps: 8_028 },
@@ -254,6 +273,17 @@ export function EraLadder({
 
   return (
     <div className="vy-ladder-wrap">
+      {/* States the BASIS on the right, where the eye lands after the rungs. These
+          are ceilings at the top tier over its full term — not an APY and not what
+          a tier 1 stake quotes — so the qualifier travels with the numbers. */}
+      <div className="vy-ladder__head">
+        <span>Max yield ceiling per asset</span>
+        {tier3TermDays > 0 && (
+          <span className="vy-ladder__term">
+            premium tier 3 · total over a <strong>{tier3TermDays}-day</strong> term
+          </span>
+        )}
+      </div>
       <div className="vy-ladder">
         {rungs.map((r) => (
           <div
@@ -266,24 +296,58 @@ export function EraLadder({
             </div>
             <div className="vy-rung__rate">{r.ratePct.toFixed(2)}%</div>
             <div className="vy-rung__rel">{r.relPct.toFixed(0)}% of anchor</div>
+
+            {assetMults.length > 0 && (
+              <div className="vy-rung__assets">
+                {assetMults.map((a) => {
+                  // Math.floor twice: the contract truncates to uint16 at each step.
+                  const capBps = Math.floor((anchorBps * r.multBps) / 10_000);
+                  const bps = Math.floor((capBps * a.multBps) / 10_000);
+                  // Bars are scaled against ONE fixed reference — the anchor at era 0,
+                  // which is USDC's ceiling — so a bar's length means the same thing in
+                  // every rung and the staircase is visible across the whole ladder.
+                  // Scaling per-rung would make every rung look identical.
+                  const w = Math.max(2, (bps / anchorBps) * 100);
+                  return (
+                    <div className="vy-arate" key={a.symbol}>
+                      <span className="vy-arate__sym">{a.symbol}</span>
+                      <span className="vy-arate__track">
+                        <span className="vy-arate__fill" style={{ width: `${w}%` }} />
+                      </span>
+                      <span className="vy-arate__pct">{(bps / 100).toFixed(2)}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         ))}
-      </div>
-      <div className="vy-ladder__note">
-        Max interest steps down as market cap grows.{' '}
-        {next && (
-          <>
-            {money(mcapUsd)} of {money(next.threshold)} to era {next.era} — which
-            would cut the ceiling from {current?.ratePct.toFixed(2)}% to{' '}
-            {next.ratePct.toFixed(2)}%.
-          </>
-        )}
-        {drift && (
-          <strong style={{ color: 'var(--vy-cliff-ink, #e34948)' }}>
-            {' '}Ladder disagrees with on-chain eraMaxBps ({(liveEraMaxBps / 100).toFixed(2)}%)
-            — multiplier table is stale.
-          </strong>
-        )}
+
+        {/* Sixth cell, filling the space the five rungs leave. It carries the
+            market cap that DRIVES the ratchet plus the explanation, so cause and
+            effect sit on one line instead of the reader pairing a figure at the
+            bottom of the section with a ladder at the top. */}
+        <div className="vy-rung vy-rung--note">
+          <div className="vy-rung__top">Market cap</div>
+          <div className="vy-mcap">{money(mcapUsd)}</div>
+          <div className="vy-rung__note-body">
+            Max interest steps down as market cap grows.{' '}
+            {next && (
+              <>
+                {money(next.threshold - mcapUsd)} more reaches era {next.era},
+                cutting the ceiling from {current?.ratePct.toFixed(2)}% to{' '}
+                {next.ratePct.toFixed(2)}%.
+              </>
+            )}
+            {!next && <>Final era — the ceiling does not step down again.</>}
+          </div>
+          {drift && (
+            <div className="vy-rung__drift">
+              Ladder disagrees with on-chain eraMaxBps
+              ({(liveEraMaxBps / 100).toFixed(2)}%) — multiplier table is stale.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -379,6 +443,125 @@ export function TradingVolume({
         every USDC/WBTC/WETH/PAXG leg inside a VY transaction ({volume.txCount.all.toLocaleString('en-US')} txs
         indexed), valued at today's marks.
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Market-maker desk
+// ─────────────────────────────────────────────────────────────
+
+export type DeskRow = {
+  symbol: string;
+  heldNative: string;
+  heldUsd: number;
+  readyNative: string;
+  readyUsd: number;
+  lastAccrual: number;
+};
+
+export type ProjPoint = {
+  label: string;
+  deployedPct: number;
+  priceUsd: number;
+};
+
+export type Desk = {
+  deployWindowSec: number;
+  stalestAccrual: number;
+  rows: DeskRow[];
+  totalHeldUsd: number;
+  totalReadyUsd: number;
+  projCurve: { livePriceUsd: number; rows: ProjPoint[] } | null;
+  errors: string[];
+};
+
+/**
+ * The desk's own book, not the same coins valued again.
+ *
+ * `held` is inventory sitting on the officer awaiting deployment; the drip
+ * releases it over `deployWindow`, and `ready` is the slice released so far.
+ * Read as a pair they answer "how much dry powder, and how much of it can move
+ * today" — which is the question the projected-price tile's ammo figure begs.
+ */
+export function MarketMakerDesk({ desk }: { desk: Desk }) {
+
+  return (
+    <div className="vy-desk">
+      <div className="vy-desk__head">
+        <div>
+          <div className="vy-desk__label">Undeployed book</div>
+          <div className="vy-desk__big">{fmtUsd(desk.totalHeldUsd, 0)}</div>
+        </div>
+        <div>
+          <div className="vy-desk__label">Ready to deploy</div>
+          <div className="vy-desk__big">{fmtUsd(desk.totalReadyUsd, 0)}</div>
+        </div>
+        <div>
+          <div className="vy-desk__label">Deploy window</div>
+          <div className="vy-desk__big">{fmtDays(desk.deployWindowSec)}</div>
+        </div>
+      </div>
+
+      <table className="vy-desk__table">
+        <thead>
+          <tr>
+            <th />
+            <th>holdings</th>
+            <th>ready to deploy</th>
+          </tr>
+        </thead>
+        <tbody>
+          {desk.rows.map((r) => (
+            <tr key={r.symbol}>
+              <td><strong>{r.symbol}</strong></td>
+              <td>
+                {r.heldNative}
+                <span className="vy-desk__usd">{fmtUsd(r.heldUsd, 0)}</span>
+              </td>
+              <td>
+                {r.readyNative}
+                <span className="vy-desk__usd">{fmtUsd(r.readyUsd, 0)}</span>
+              </td>
+
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {desk.projCurve && (
+        <div className="vy-proj">
+          <div className="vy-proj__title">
+            Projected VY as the book deploys
+            <span className="vy-proj__tag">projection · not a forecast</span>
+          </div>
+
+          <table className="vy-desk__table">
+            <thead>
+              <tr>
+                <th />
+                <th>book deployed</th>
+                <th>projected VY</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {desk.projCurve.rows.map((r) => {
+                const x = r.priceUsd / desk.projCurve!.livePriceUsd;
+                return (
+                  <tr key={r.label}>
+                    <td><strong>{r.label}</strong></td>
+                    <td>{r.deployedPct.toFixed(1)}%</td>
+                    <td>{fmtUsd(r.priceUsd)}</td>
+                    <td className="vy-proj__x">{x.toFixed(2)}×</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+        </div>
+      )}
     </div>
   );
 }
