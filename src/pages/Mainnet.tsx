@@ -7,11 +7,12 @@ import { mainnet } from 'viem/chains';
 import { Value } from '../components/core';
 import { BackingTiles, HoldingsTable, EraLadder, TradingVolume, MarketMakerDesk } from '../components/BalanceSheet';
 import type { VolumeData } from '../components/BalanceSheet';
-import { CONTRACT_ACRONYMS, MAINNET_RPC_URL } from '../config';
+import { CONTRACT_ACRONYMS, MAINNET_RPC_URL, RPC_HTTP_OPTS } from '../config';
 import { Amount, USD, VY } from '../models';
 import type { Currency } from '../models';
 import networks from '../networks';
 import { indexTxFlow, bucketFlow, type FlowProgress } from '../utils/txFlow';
+import { scanFullHistory } from '../utils/logs';
 
 
 /**
@@ -22,7 +23,7 @@ const COLLATERAL_SYMBOLS = new Set(['WETH', 'WBTC', 'PAXG']);
 
 const client = createPublicClient({
   chain: mainnet,
-  transport: http(MAINNET_RPC_URL),
+  transport: http(MAINNET_RPC_URL, RPC_HTTP_OPTS),
 });
 
 /** VBSO proxy — the company balance sheet. */
@@ -411,6 +412,17 @@ const fetchData = async () => {
   const oldBuybackAddress = '0xD2F0826af20EbDc833c8418E312F23f373F8500e' as Address;
   const vytAddress = (addresses as Record<string, Address>)['ValinityYieldTreasury'];
   const erc20TransferEvent = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)');
+  // Chunked, and non-fatal. These two are the only full-history scans on the 30s
+  // refresh path; unchunked and unguarded they threw on any provider hiccup and
+  // took the whole page down with them.
+  const buybackTransfers = (from: Address) => scanFullHistory(client, (fromBlock, toBlock) =>
+    client.getLogs({
+      address: vyTokenConfig.address,
+      event: erc20TransferEvent,
+      args: { from, to: vytAddress },
+      fromBlock,
+      toBlock,
+    }));
   const [buybackBalanceResult, buybackToVytLogs, oldBuybackToVytLogs] = await Promise.all([
     client.multicall({
       contracts: [
@@ -418,19 +430,13 @@ const fetchData = async () => {
       ],
       allowFailure: true
     }),
-    client.getLogs({
-      address: vyTokenConfig.address,
-      event: erc20TransferEvent,
-      args: { from: buybackAddress, to: vytAddress },
-      fromBlock: 0n,
-      toBlock: 'latest',
+    buybackTransfers(buybackAddress).catch((e: Error) => {
+      overviewErrors.push(`buyback transfers (VBO→VYT): ${e.message ?? 'scan failed'}`);
+      return [];
     }),
-    client.getLogs({
-      address: vyTokenConfig.address,
-      event: erc20TransferEvent,
-      args: { from: oldBuybackAddress, to: vytAddress },
-      fromBlock: 0n,
-      toBlock: 'latest',
+    buybackTransfers(oldBuybackAddress).catch((e: Error) => {
+      overviewErrors.push(`buyback transfers (old VBO→VYT): ${e.message ?? 'scan failed'}`);
+      return [];
     }),
   ]);
   const buybackVyBalance = buybackBalanceResult[0].status === 'success'
@@ -1069,6 +1075,7 @@ type MonitorData = Awaited<ReturnType<typeof fetchData>>;
 export default function Mainnet() {
   const [data, setData] = useState<MonitorData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [volume, setVolume] = useState<VolumeData | null>(null);
   const [volProgress, setVolProgress] = useState<FlowProgress | null>(null);
@@ -1077,7 +1084,10 @@ export default function Mainnet() {
     let active = true;
     const load = () => {
       fetchData()
-        .then(d => { if (active) setData(d); })
+        // Clearing the error on success matters as much as setting it: without
+        // this, one failed 30s refresh reddened the page permanently, long after
+        // the RPC had recovered.
+        .then(d => { if (active) { setData(d); setError(null); setLoadedAt(Date.now()); } })
         .catch(e => { if (active) setError(e.message ?? String(e)); });
     };
     load();
@@ -1113,7 +1123,10 @@ export default function Mainnet() {
     return () => clearInterval(t);
   }, [data]);
 
-  if (error) return <p style={{ textAlign: 'center', color: 'red' }}>Error: {error}</p>;
+  // A refresh failure is only fatal before the first successful load. Once the
+  // sheet is on screen, a provider outage downgrades it to stale-with-a-banner
+  // rather than blanking numbers the user was reading.
+  if (error && !data) return <p style={{ textAlign: 'center', color: 'red' }}>Error: {error}</p>;
   if (!data) return (
     <p style={{ textAlign: 'center', opacity: 0.8 }}>
       Loading on-chain data… {elapsed}s
@@ -1126,7 +1139,21 @@ export default function Mainnet() {
       )}
     </p>
   );
-  return <Content data={data} volume={volume} volProgress={volProgress} />;
+  return (
+    <>
+      {error && (
+        <div className="box box--warning">
+          <div className="error-item">
+            ⚠ Refresh failed — showing the last good load
+            {loadedAt && ` from ${new Date(loadedAt).toLocaleTimeString()}`}. The RPC
+            provider is not responding; retrying every 30s.
+          </div>
+          <div className="error-item" style={{ opacity: 0.7 }}>{error}</div>
+        </div>
+      )}
+      <Content data={data} volume={volume} volProgress={volProgress} />
+    </>
+  );
 }
 
 function Content({ data, volume, volProgress }: { data: MonitorData; volume: VolumeData | null; volProgress: FlowProgress | null }) {
